@@ -240,7 +240,7 @@ mod tests {
         let error = dune.execute_query(u32::MAX, None).await.unwrap_err();
         assert_eq!(
             error,
-            DuneRequestError::Dune(String::from("An internal error occured"))
+            DuneRequestError::Dune(String::from("An internal error occurred"))
         )
     }
 
