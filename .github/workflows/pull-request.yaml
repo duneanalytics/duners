@@ -3,6 +3,9 @@ name: Rust Lint, Clippy & Tests
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Lint & Clippy
-        run: cargo fmt --check && cargo clippy -- -D warnings
+        run: cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings -W unused-crate-dependencies
 
       - name: Tests
         run: cargo test

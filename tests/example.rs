@@ -1,3 +1,5 @@
+#![allow(unused_crate_dependencies)]
+
 use chrono::{DateTime, Utc};
 use duners::{
     client::DuneClient, parameters::Parameter, parse_utils::datetime_from_str,
