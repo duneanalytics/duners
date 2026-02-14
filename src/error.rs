@@ -1,5 +1,5 @@
-use std::fmt;
 use serde::Deserialize;
+use std::fmt;
 
 /// Error payload returned by the Dune API when a request fails (e.g. invalid API key, query not found).
 #[derive(Deserialize, Debug)]
