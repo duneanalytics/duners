@@ -222,7 +222,7 @@ mod tests {
     use serde::Deserialize;
 
     const QUERY_ID: u32 = 971694;
-    const JOB_ID: &str = "01K9QTN27XQTXQV59BKBJ4GKFW";
+    const JOB_ID: &str = "01KHDCT5QFS1QPE9T2QEWPEAGG";
 
     #[tokio::test]
     async fn invalid_api_key() {
