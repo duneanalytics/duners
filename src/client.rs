@@ -3,7 +3,7 @@ use crate::parameters::Parameter;
 use crate::response::{
     CancellationResponse, ExecutionResponse, ExecutionStatus, GetResultResponse, GetStatusResponse,
 };
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use log::{debug, error, info, warn};
 use reqwest::{Error, Response};
 use serde::de::DeserializeOwned;
@@ -48,7 +48,7 @@ impl DuneClient {
 
     /// Creates a client using the `DUNE_API_KEY` environment variable.
     ///
-    /// Loads `.env` from the current directory if present (via the `dotenv` crate).
+    /// Loads `.env` from the current directory if present (via the `dotenvy` crate).
     /// Panics if `DUNE_API_KEY` is not set.
     pub fn from_env() -> DuneClient {
         dotenv().ok();
