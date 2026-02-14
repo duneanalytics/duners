@@ -13,7 +13,9 @@ use std::str::FromStr;
 /// Returned from [`DuneClient::execute_query`](crate::client::DuneClient::execute_query). Contains the execution ID to poll or fetch results.
 #[derive(Deserialize, Debug)]
 pub struct ExecutionResponse {
+    /// Use this ID with [`get_status`](crate::client::DuneClient::get_status) and [`get_results`](crate::client::DuneClient::get_results).
     pub execution_id: String,
+    /// Current state of the execution (e.g. [`ExecutionStatus::Pending`]).
     pub state: ExecutionStatus,
 }
 
@@ -23,10 +25,15 @@ pub struct ExecutionResponse {
 /// Pending state also comes along with a "queue position"
 #[derive(DeserializeFromStr, Debug, PartialEq)]
 pub enum ExecutionStatus {
+    /// Query finished successfully; results are available.
     Complete,
+    /// Query is currently running.
     Executing,
+    /// Query is queued; check `queue_position` on [`GetStatusResponse`].
     Pending,
+    /// Execution was cancelled (e.g. via [`cancel_execution`](crate::client::DuneClient::cancel_execution)).
     Cancelled,
+    /// Execution failed (e.g. timeout after 30 minutes).
     Failed,
 }
 
@@ -46,8 +53,16 @@ impl FromStr for ExecutionStatus {
 }
 
 impl ExecutionStatus {
-    /// utility method for terminal query execution status.
-    /// The three terminal states are complete, cancelled and failed.
+    /// Returns `true` when execution will not change state again (complete, cancelled, or failed).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use duners::ExecutionStatus;
+    ///
+    /// assert!(ExecutionStatus::Complete.is_terminal());
+    /// assert!(!ExecutionStatus::Pending.is_terminal());
+    /// ```
     pub fn is_terminal(&self) -> bool {
         match self {
             ExecutionStatus::Complete => true,
@@ -71,17 +86,26 @@ pub struct CancellationResponse {
 /// and always contained in [ExecutionResult](ExecutionResult).
 #[derive(Deserialize, Debug)]
 pub struct ResultMetaData {
+    /// Names of columns in the result set.
     pub column_names: Vec<String>,
+    /// Optional Dune type names for each column.
     #[serde(default)]
     pub column_types: Option<Vec<String>>,
+    /// Number of rows in this result set (when present).
     #[serde(default)]
     pub row_count: Option<u32>,
+    /// Size in bytes of the result set.
     pub result_set_bytes: u64,
+    /// Total size when result is paged.
     #[serde(default)]
     pub total_result_set_bytes: Option<u64>,
+    /// Total number of rows across all pages.
     pub total_row_count: u32,
+    /// Number of datapoints (Dune-specific).
     pub datapoint_count: u32,
+    /// Time spent in queue before execution started (milliseconds).
     pub pending_time_millis: Option<u32>,
+    /// Time spent executing the query (milliseconds).
     pub execution_time_millis: u32,
 }
 
@@ -113,9 +137,13 @@ pub struct ExecutionTimes {
 /// Indicates the current state of execution along with some metadata.
 #[derive(Deserialize, Debug)]
 pub struct GetStatusResponse {
+    /// Same execution ID used in the status request.
     pub execution_id: String,
+    /// The Dune query ID that was executed.
     pub query_id: u32,
+    /// Current execution state; use [`ExecutionStatus::is_terminal`] to check if done.
     pub state: ExecutionStatus,
+    /// Timestamps for submitted_at, expires_at, execution_started_at, etc.
     #[serde(flatten)]
     pub times: ExecutionTimes,
     /// If the query state is Pending,
@@ -130,7 +158,9 @@ pub struct GetStatusResponse {
 /// as the `result` field.
 #[derive(Deserialize, Debug)]
 pub struct ExecutionResult<T> {
+    /// Deserialized result rows; `T` is your row type (e.g. a struct with `#[derive(Deserialize)]`).
     pub rows: Vec<T>,
+    /// Column names, row counts, and timing info.
     pub metadata: ResultMetaData,
 }
 
@@ -139,21 +169,43 @@ pub struct ExecutionResult<T> {
 /// except that [ResultMetaData](ResultMetaData) is contained within the `result` field.
 #[derive(Deserialize, Debug)]
 pub struct GetResultResponse<T> {
+    /// Execution ID for this result.
     pub execution_id: String,
+    /// The Dune query ID that was executed.
     pub query_id: u32,
+    /// Optional flag indicating whether execution is finished.
     #[serde(default)]
     pub is_execution_finished: Option<bool>,
+    /// Final state (typically [`ExecutionStatus::Complete`] when results are available).
     pub state: ExecutionStatus,
     // TODO - this `flatten` isn't what I had hoped for.
     //  I want the `times` field to disappear
     //  and all sub-fields to be brought up to this layer.
+    /// Timestamps for submitted_at, expires_at, execution_started_at, etc.
     #[serde(flatten)]
     pub times: ExecutionTimes,
+    /// The result set (rows and metadata).
     pub result: ExecutionResult<T>,
 }
 
 impl<T> GetResultResponse<T> {
     /// Convenience method for fetching the "deeply" nested `rows` of the result response.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError, GetResultResponse};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Row { symbol: String, max_price: f64 }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let response: GetResultResponse<Row> = client.refresh(971694, None, None).await?;
+    /// let rows = response.get_rows();
+    /// # Ok(()) }
+    /// ```
     pub fn get_rows(self) -> Vec<T> {
         self.result.rows
     }
