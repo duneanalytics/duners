@@ -14,33 +14,42 @@ use tokio::time::{sleep, Duration};
 
 const BASE_URL: &str = "https://api.dune.com/api/v1";
 
-/// DuneClient provides an interface for interacting with Dune Analytics API.
-/// Official Documentation here: [https://dune.com/docs/api/](https://dune.com/docs/api/).
+/// Client for the [Dune Analytics API](https://dune.com/docs/api/).
 ///
-/// Elementary Routes (i.e. those provided by Dune)
-/// - POST
-///     - execute_query
-///     - cancel_execution
-/// - GET
-///     - get_status
-///     - get_results
+/// Create a client with [`DuneClient::new`] (pass the API key directly) or [`DuneClient::from_env`]
+/// (reads `DUNE_API_KEY` from the environment, including from a `.env` file if present).
 ///
-/// Furthermore, this interface also implements a convenience method `refresh` which acts as follows:
-/// 1. Execute query
-/// 2. While execution status is not in a terminal state, sleep and check again
-/// 3. Get and return execution results.
+/// ## High-level usage
+///
+/// Use **[`refresh`](DuneClient::refresh)** to execute a query, wait until it finishes, and get
+/// the result rows in one call. This is the easiest way to run a query.
+///
+/// ## Low-level usage
+///
+/// For more control (e.g. polling yourself or cancelling), use:
+/// - **[`execute_query`](DuneClient::execute_query)** — Start a query, get an `execution_id`.
+/// - **[`get_status`](DuneClient::get_status)** — Check whether the execution is still running.
+/// - **[`get_results`](DuneClient::get_results)** — Fetch the result rows (only valid when complete).
+/// - **[`cancel_execution`](DuneClient::cancel_execution)** — Cancel a running execution.
 pub struct DuneClient {
-    /// An essential value for request authentication.
+    /// API key used for request authentication.
     api_key: String,
 }
 
 impl DuneClient {
-    /// Constructor
+    /// Creates a client with the given API key.
+    ///
+    /// Get your API key from [Dune → Settings → API](https://dune.com/settings/api).
     pub fn new(api_key: &str) -> DuneClient {
         DuneClient {
             api_key: api_key.to_string(),
         }
     }
+
+    /// Creates a client using the `DUNE_API_KEY` environment variable.
+    ///
+    /// Loads `.env` from the current directory if present (via the `dotenv` crate).
+    /// Panics if `DUNE_API_KEY` is not set.
     pub fn from_env() -> DuneClient {
         dotenv().ok();
         DuneClient {
@@ -157,17 +166,14 @@ impl DuneClient {
     ///   (i.e. Too Many Requests) especially when executing multiple queries in parallel.
     ///
     /// # Examples
-    /// ```
-    /// use duners::{
-    ///     client::DuneClient,
-    ///     parse_utils::{datetime_from_str, f64_from_str},
-    ///     error::DuneRequestError
-    /// };
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use duners::parse_utils::{datetime_from_str, f64_from_str};
     /// use serde::Deserialize;
     /// use chrono::{DateTime, Utc};
     ///
-    /// // User must declare the expected query return types and fields.
-    /// #[derive(Deserialize, Debug, PartialEq)]
+    /// #[derive(Deserialize, Debug)]
     /// struct ResultStruct {
     ///     text_field: String,
     ///     #[serde(deserialize_with = "f64_from_str")]
@@ -179,9 +185,9 @@ impl DuneClient {
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), DuneRequestError> {
-    ///     let dune = DuneClient::from_env();
-    ///     let results = dune.refresh::<ResultStruct>(1215383, None, None).await?;
-    ///     println!("{:?}", results.get_rows());
+    ///     let client = DuneClient::from_env();
+    ///     let result = client.refresh::<ResultStruct>(1215383, None, None).await?;
+    ///     println!("{:?}", result.get_rows());
     ///     Ok(())
     /// }
     /// ```

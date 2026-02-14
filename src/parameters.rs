@@ -1,33 +1,44 @@
 use chrono::{DateTime, Utc};
 
-/// Dune supports 4 different parameter types enumerated here:
-/// In end, all parameters are passed to
-/// Dune via the API as JSON strings.
+/// Dune supports four parameter types; all are sent to the API as JSON strings.
 #[derive(Debug, PartialEq)]
 enum ParameterType {
-    /// A.k.a. string (used for transaction hashes and evm addresses, etc.)
     Text,
-    /// Encapsulates all numerical types (integer and float).
     Number,
-    /// A.k.a. List or Dropdown of text.
     Enum,
-    /// Dune Date strings take the form `YYYY-MM-DD hh:mm:ss`
     Date,
 }
 
+/// A single query parameter for a [parameterized Dune query](https://dune.com/docs/api/api-reference/execute-queries/execute-query-id/).
+///
+/// The parameter **name** must match the name defined in the query on Dune (e.g. in the query editor).
+/// Use the constructors [`Parameter::text`], [`Parameter::number`], [`Parameter::date`], and
+/// [`Parameter::list`] to build parameters of the correct type.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use duners::Parameter;
+/// use chrono::Utc;
+///
+/// let params = vec![
+///     Parameter::text("WalletAddress", "0x1234..."),
+///     Parameter::number("MinAmount", "100"),
+///     Parameter::list("Token", "ETH"),
+///     Parameter::date("StartDate", Utc::now()),
+/// ];
+/// ```
 #[derive(Debug, PartialEq)]
 pub struct Parameter {
-    /// Parameter Name.
+    /// Parameter name (must match the query’s parameter name on Dune).
     pub key: String,
-    /// Currently unused type field
-    /// (will become relevant when API supports `upsert_query`)
     ptype: ParameterType,
-    /// String representation of parameter's value
+    /// String value sent to the API.
     pub value: String,
 }
 
 impl Parameter {
-    /// Constructor of Date type Parameter
+    /// Builds a **date** parameter. The value is sent as `YYYY-MM-DD HH:MM:SS`.
     pub fn date(name: &str, value: DateTime<Utc>) -> Self {
         Parameter {
             key: String::from(name),
@@ -38,7 +49,7 @@ impl Parameter {
         }
     }
 
-    /// Constructor of Text type Parameter
+    /// Builds a **text** parameter (e.g. addresses, hashes, plain strings).
     pub fn text(name: &str, value: &str) -> Self {
         Parameter {
             key: String::from(name),
@@ -47,7 +58,7 @@ impl Parameter {
         }
     }
 
-    /// Constructor of Numeric type Parameter
+    /// Builds a **number** parameter. Pass the value as a string (e.g. `"42"` or `"3.14"`).
     pub fn number(name: &str, value: &str) -> Self {
         Parameter {
             key: String::from(name),
@@ -56,7 +67,7 @@ impl Parameter {
         }
     }
 
-    /// Constructor of List/Enum type Parameter
+    /// Builds a **list/enum** parameter (dropdown-style; value must match one of the query’s options).
     pub fn list(name: &str, value: &str) -> Self {
         Parameter {
             key: String::from(name),

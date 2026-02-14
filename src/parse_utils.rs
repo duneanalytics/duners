@@ -1,3 +1,8 @@
+//! Utilities for parsing Dune API response fields.
+//!
+//! Dune often returns numbers and dates as **strings** in JSON. Use the deserializer helpers here
+//! with `#[serde(deserialize_with = "...")]` so your structs can use `f64` or `DateTime<Utc>`.
+
 use chrono::{DateTime, NaiveDateTime, ParseError, Utc};
 use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
@@ -7,18 +12,36 @@ fn date_string_parser(date_str: &str, format: &str) -> Result<DateTime<Utc>, Par
     Ok(DateTime::from_naive_utc_and_offset(native?, Utc))
 }
 
-/// The date format returned by DuneAPI response Date fields (e.g. `submitted_at`)
+/// Parses API metadata date strings (e.g. `submitted_at`, `execution_ended_at`).
+///
+/// Format: `%Y-%m-%dT%H:%M:%S.%fZ` (ISO 8601 with optional subseconds).
 pub fn date_parse(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
     date_string_parser(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
 }
 
-/// The Date format returned from data fields of type timestamp.
+/// Parses timestamp strings returned in **query result** columns (Dune timestamp type).
+///
+/// Accepts `YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DD HH:MM:SS.ffffff`.
 pub fn dune_date(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
     // Try with microseconds first
     date_string_parser(date_str, "%Y-%m-%d %H:%M:%S.%f")
         .or_else(|_| date_string_parser(date_str, "%Y-%m-%d %H:%M:%S"))
 }
 
+/// Serde deserializer for date/time fields that Dune returns as strings.
+///
+/// Tries API metadata format first, then query-result timestamp format. Use with
+/// `#[serde(deserialize_with = "duners::parse_utils::datetime_from_str")]` on `DateTime<Utc>` fields.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Deserialize)]
+/// struct MyRow {
+///     #[serde(deserialize_with = "duners::parse_utils::datetime_from_str")]
+///     created_at: DateTime<Utc>,
+/// }
+/// ```
 pub fn datetime_from_str<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
 where
     D: Deserializer<'de>,
@@ -34,6 +57,7 @@ where
     }
 }
 
+/// Serde deserializer for optional date/time strings (e.g. `expires_at`).
 pub fn optional_datetime_from_str<'de, D>(
     deserializer: D,
 ) -> Result<Option<DateTime<Utc>>, D::Error>
@@ -50,6 +74,20 @@ where
     }
 }
 
+/// Serde deserializer for numeric fields that Dune returns as strings.
+///
+/// Use with `#[serde(deserialize_with = "duners::parse_utils::f64_from_str")]` on `f64` fields
+/// when the API returns a string like `"3.14"` instead of a number.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Deserialize)]
+/// struct MyRow {
+///     #[serde(deserialize_with = "duners::parse_utils::f64_from_str")]
+///     price: f64,
+/// }
+/// ```
 pub fn f64_from_str<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: Deserializer<'de>,

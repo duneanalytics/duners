@@ -1,22 +1,38 @@
+use std::fmt;
 use serde::Deserialize;
 
-/// Encapsulates any "unexpected" data
-/// returned from Dune upon bad request.
+/// Error payload returned by the Dune API when a request fails (e.g. invalid API key, query not found).
 #[derive(Deserialize, Debug)]
 pub struct DuneError {
+    /// Human-readable error message from Dune.
     pub error: String,
 }
 
+/// All errors that can occur when calling the Dune API or parsing responses.
+///
+/// Use `?` in async functions that return `Result<_, DuneRequestError>` to propagate errors.
+/// Implements [`std::error::Error`] and [`Display`](fmt::Display) for logging and error reporting.
 #[derive(Debug, PartialEq)]
 pub enum DuneRequestError {
-    /// Includes known errors:
-    /// "invalid API Key"
-    /// "Query not found"
-    /// "The requested execution ID (ID: wonky job ID) is invalid."
+    /// Error returned by the Dune API. Common messages include:
+    /// - `"invalid API Key"`
+    /// - `"Query not found"`
+    /// - `"The requested execution ID (ID: …) is invalid."`
     Dune(String),
-    /// Errors bubbled up from reqwest::Error
+    /// Network or HTTP errors from the underlying request (e.g. connection failed, timeout).
     Request(String),
 }
+
+impl fmt::Display for DuneRequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DuneRequestError::Dune(msg) => write!(f, "Dune API error: {}", msg),
+            DuneRequestError::Request(msg) => write!(f, "request error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for DuneRequestError {}
 
 impl From<DuneError> for DuneRequestError {
     fn from(value: DuneError) -> Self {

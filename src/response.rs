@@ -1,10 +1,16 @@
+//! Response types for Dune API methods.
+//!
+//! You will mostly use [`GetResultResponse<T>`] and its [`get_rows`](GetResultResponse::get_rows) method
+//! when calling [`refresh`](crate::client::DuneClient::refresh) or [`get_results`](crate::client::DuneClient::get_results).
+//! The generic `T` is your row type (a struct with `#[derive(Deserialize)]` matching the query columns).
+
 use crate::parse_utils::{datetime_from_str, optional_datetime_from_str};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_with::DeserializeFromStr;
 use std::str::FromStr;
 
-/// Returned from successful call to `DuneClient::execute_query`
+/// Returned from [`DuneClient::execute_query`](crate::client::DuneClient::execute_query). Contains the execution ID to poll or fetch results.
 #[derive(Deserialize, Debug)]
 pub struct ExecutionResponse {
     pub execution_id: String,
