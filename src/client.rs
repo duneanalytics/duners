@@ -165,7 +165,7 @@ impl DuneClient {
     /// use duners::{DuneClient, DuneRequestError};
     /// use serde::Deserialize;
     ///
-    /// #[derive(Deserialize)]
+    /// #[derive(Deserialize, Debug)]
     /// struct Row { symbol: String, max_price: f64 }
     ///
     /// # async fn run() -> Result<(), DuneRequestError> {
