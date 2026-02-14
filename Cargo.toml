@@ -1,6 +1,6 @@
 [package]
 name = "duners"
-version = "0.0.3"
+version = "0.0.7"
 authors = ["Ben Smith <bh2smith@gmail.com>"]
 edition = "2021"
 description = "A simple framework for fetching query results from with [Dune Analytics API](https://dune.com/docs/api/)."

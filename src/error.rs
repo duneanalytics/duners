@@ -1,3 +1,5 @@
+//! Error types for Dune API requests and response parsing.
+
 use serde::Deserialize;
 use std::fmt;
 
@@ -12,6 +14,16 @@ pub struct DuneError {
 ///
 /// Use `?` in async functions that return `Result<_, DuneRequestError>` to propagate errors.
 /// Implements [`std::error::Error`] and [`Display`](fmt::Display) for logging and error reporting.
+///
+/// # Example
+///
+/// ```rust
+/// use duners::DuneRequestError;
+///
+/// fn handle_error(e: DuneRequestError) {
+///     eprintln!("{}", e);
+/// }
+/// ```
 #[derive(Debug, PartialEq)]
 pub enum DuneRequestError {
     /// Error returned by the Dune API. Common messages include:

@@ -1,3 +1,7 @@
+//! Dune API client implementation.
+//!
+//! This module provides [`DuneClient`] for calling the [Dune Analytics API](https://dune.com/docs/api/).
+
 use crate::error::{DuneError, DuneRequestError};
 use crate::parameters::Parameter;
 use crate::response::{
@@ -12,6 +16,7 @@ use std::collections::HashMap;
 use std::env;
 use tokio::time::{sleep, Duration};
 
+/// Base URL for the Dune API (v1).
 const BASE_URL: &str = "https://api.dune.com/api/v1";
 
 /// Client for the [Dune Analytics API](https://dune.com/docs/api/).
@@ -104,6 +109,18 @@ impl DuneClient {
 
     /// Execute Query (with or without parameters)
     /// cf. [https://dune.com/docs/api/api-reference/execute-queries/execute-query-id/](https://dune.com/docs/api/api-reference/execute-queries/execute-query-id/)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let exec = client.execute_query(971694, None).await?;
+    /// println!("Execution ID: {}", exec.execution_id);
+    /// # Ok(()) }
+    /// ```
     pub async fn execute_query(
         &self,
         query_id: u32,
@@ -141,6 +158,22 @@ impl DuneClient {
 
     /// Get Query Execution Results (by `job_id`)
     /// cf. [https://dune.com/docs/api/api-reference/get-results/execution-results/](https://dune.com/docs/api/api-reference/get-results/execution-results/)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, Debug)]
+    /// struct Row { symbol: String, max_price: f64 }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let results = client.get_results::<Row>("your-execution-id").await?;
+    /// for row in results.get_rows() { println!("{:?}", row); }
+    /// # Ok(()) }
+    /// ```
     pub async fn get_results<T: DeserializeOwned>(
         &self,
         job_id: &str,

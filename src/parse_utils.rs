@@ -15,6 +15,15 @@ fn date_string_parser(date_str: &str, format: &str) -> Result<DateTime<Utc>, Par
 /// Parses API metadata date strings (e.g. `submitted_at`, `execution_ended_at`).
 ///
 /// Format: `%Y-%m-%dT%H:%M:%S.%fZ` (ISO 8601 with optional subseconds).
+///
+/// # Example
+///
+/// ```rust
+/// use duners::parse_utils::date_parse;
+///
+/// let dt = date_parse("2022-01-01T12:00:00.000Z").unwrap();
+/// assert_eq!(dt.format("%Y-%m-%d").to_string(), "2022-01-01");
+/// ```
 pub fn date_parse(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
     date_string_parser(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
 }
@@ -81,12 +90,17 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust
+/// use duners::parse_utils::f64_from_str;
+/// use serde::Deserialize;
+///
 /// #[derive(Deserialize)]
 /// struct MyRow {
-///     #[serde(deserialize_with = "duners::parse_utils::f64_from_str")]
+///     #[serde(deserialize_with = "f64_from_str")]
 ///     price: f64,
 /// }
+///
+/// // In real usage, MyRow is deserialized from Dune API JSON.
 /// ```
 pub fn f64_from_str<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where

@@ -1,3 +1,8 @@
+//! Query parameters for parameterized Dune queries.
+//!
+//! Use [`Parameter`] and its constructors ([`Parameter::text`], [`Parameter::number`], etc.)
+//! when calling [`execute_query`](crate::client::DuneClient::execute_query) or [`refresh`](crate::client::DuneClient::refresh).
+
 use chrono::{DateTime, Utc};
 
 /// Dune supports four parameter types; all are sent to the API as JSON strings.
@@ -39,6 +44,15 @@ pub struct Parameter {
 
 impl Parameter {
     /// Builds a **date** parameter. The value is sent as `YYYY-MM-DD HH:MM:SS`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use duners::Parameter;
+    /// use chrono::Utc;
+    ///
+    /// let p = Parameter::date("StartDate", Utc::now());
+    /// ```
     pub fn date(name: &str, value: DateTime<Utc>) -> Self {
         Parameter {
             key: String::from(name),
