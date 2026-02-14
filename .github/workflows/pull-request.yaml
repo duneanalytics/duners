@@ -27,3 +27,23 @@ jobs:
         run: cargo test
         env:
           DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
+
+  doc-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-docs
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Doc coverage check
+        run: bash scripts/check-doc-coverage.sh
