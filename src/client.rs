@@ -83,11 +83,7 @@ impl DuneClient {
     }
 
     /// Internal POST request handler with arbitrary JSON body
-    async fn _post_json(
-        &self,
-        route: &str,
-        body: serde_json::Value,
-    ) -> Result<Response, Error> {
+    async fn _post_json(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
         debug!("POST to {} with body {:?}", route, &body);
         let client = reqwest::Client::new();
@@ -100,11 +96,7 @@ impl DuneClient {
     }
 
     /// Internal PATCH request handler with JSON body
-    async fn _patch(
-        &self,
-        route: &str,
-        body: serde_json::Value,
-    ) -> Result<Response, Error> {
+    async fn _patch(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
         debug!("PATCH to {} with body {:?}", route, &body);
         let client = reqwest::Client::new();
@@ -224,6 +216,18 @@ impl DuneClient {
     ///
     /// The `performance` parameter controls the execution tier:
     /// `"medium"` (default), `"large"`, or `"community"`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let exec = client.execute_sql("SELECT 1 AS n", None).await?;
+    /// println!("Execution ID: {}", exec.execution_id);
+    /// # Ok(()) }
+    /// ```
     pub async fn execute_sql(
         &self,
         sql: &str,
@@ -296,6 +300,22 @@ impl DuneClient {
     ///
     /// Returns the most recent execution results for the given query ID.
     /// Does not consume credits (no re-execution).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, Debug)]
+    /// struct Row { symbol: String, price: f64 }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let results = client.get_latest_results::<Row>(971694).await?;
+    /// for row in results.get_rows() { println!("{:?}", row); }
+    /// # Ok(()) }
+    /// ```
     pub async fn get_latest_results<T: DeserializeOwned>(
         &self,
         query_id: u32,
@@ -308,10 +328,7 @@ impl DuneClient {
     }
 
     /// Get the latest results for a query as CSV text.
-    pub async fn get_latest_results_csv(
-        &self,
-        query_id: u32,
-    ) -> Result<String, DuneRequestError> {
+    pub async fn get_latest_results_csv(&self, query_id: u32) -> Result<String, DuneRequestError> {
         let response = self
             ._get_url(&format!("query/{query_id}/results/csv"))
             .await
@@ -320,10 +337,7 @@ impl DuneClient {
     }
 
     /// Get execution results as CSV text (by `job_id`).
-    pub async fn get_results_csv(
-        &self,
-        job_id: &str,
-    ) -> Result<String, DuneRequestError> {
+    pub async fn get_results_csv(&self, job_id: &str) -> Result<String, DuneRequestError> {
         let response = self
             ._get_url(&format!("execution/{job_id}/results/csv"))
             .await
@@ -334,10 +348,23 @@ impl DuneClient {
     /// Create a new Dune query.
     ///
     /// `body.name` and `body.query_sql` are required by the API.
-    pub async fn create_query(
-        &self,
-        body: QueryBody,
-    ) -> Result<QueryResponse, DuneRequestError> {
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError, QueryBody};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let resp = client.create_query(QueryBody {
+    ///     name: Some("My query".into()),
+    ///     query_sql: Some("SELECT 1 AS n".into()),
+    ///     ..Default::default()
+    /// }).await?;
+    /// println!("Query ID: {}", resp.query_id);
+    /// # Ok(()) }
+    /// ```
+    pub async fn create_query(&self, body: QueryBody) -> Result<QueryResponse, DuneRequestError> {
         let response = self
             ._post_json("query", serde_json::to_value(&body).unwrap())
             .await
@@ -346,10 +373,7 @@ impl DuneClient {
     }
 
     /// Read a query's metadata and SQL by ID.
-    pub async fn get_query(
-        &self,
-        query_id: u32,
-    ) -> Result<DuneQuery, DuneRequestError> {
+    pub async fn get_query(&self, query_id: u32) -> Result<DuneQuery, DuneRequestError> {
         let response = self
             ._get_url(&format!("query/{query_id}"))
             .await
@@ -374,10 +398,7 @@ impl DuneClient {
     }
 
     /// Archive a query (prevents running or editing).
-    pub async fn archive_query(
-        &self,
-        query_id: u32,
-    ) -> Result<QueryResponse, DuneRequestError> {
+    pub async fn archive_query(&self, query_id: u32) -> Result<QueryResponse, DuneRequestError> {
         let response = self
             ._post_json(&format!("query/{query_id}/archive"), json!({}))
             .await
@@ -386,10 +407,7 @@ impl DuneClient {
     }
 
     /// Unarchive a previously archived query.
-    pub async fn unarchive_query(
-        &self,
-        query_id: u32,
-    ) -> Result<QueryResponse, DuneRequestError> {
+    pub async fn unarchive_query(&self, query_id: u32) -> Result<QueryResponse, DuneRequestError> {
         let response = self
             ._post_json(&format!("query/{query_id}/unarchive"), json!({}))
             .await
@@ -434,6 +452,23 @@ impl DuneClient {
     }
 
     /// Upload CSV data to create or replace a table.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError, UploadCsvRequest};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let resp = client.upload_csv(UploadCsvRequest {
+    ///     data: "name,age\nAlice,30\nBob,25".into(),
+    ///     table_name: "my_table".into(),
+    ///     description: None,
+    ///     is_private: Some(true),
+    /// }).await?;
+    /// println!("Table: {}", resp.full_name);
+    /// # Ok(()) }
+    /// ```
     pub async fn upload_csv(
         &self,
         request: UploadCsvRequest,
@@ -703,8 +738,16 @@ mod tests {
                 namespace: namespace.clone(),
                 table_name: table_name.to_string(),
                 schema: vec![
-                    ColumnDef { name: "name".to_string(), column_type: "varchar".to_string(), nullable: None },
-                    ColumnDef { name: "age".to_string(), column_type: "integer".to_string(), nullable: None },
+                    ColumnDef {
+                        name: "name".to_string(),
+                        column_type: "varchar".to_string(),
+                        nullable: None,
+                    },
+                    ColumnDef {
+                        name: "age".to_string(),
+                        column_type: "integer".to_string(),
+                        nullable: None,
+                    },
                 ],
                 description: None,
                 is_private: Some(true),
@@ -821,10 +864,7 @@ mod tests {
     #[tokio::test]
     async fn execute_sql() {
         let dune = DuneClient::from_env();
-        let exec = dune
-            .execute_sql("SELECT 1 AS n", None)
-            .await
-            .unwrap();
+        let exec = dune.execute_sql("SELECT 1 AS n", None).await.unwrap();
         assert!(!exec.execution_id.is_empty());
         let cancellation = dune.cancel_execution(&exec.execution_id).await.unwrap();
         assert!(cancellation.success);
@@ -834,20 +874,13 @@ mod tests {
     async fn get_latest_results() {
         let dune = DuneClient::from_env();
 
-        #[derive(Deserialize, Debug)]
-        struct ExpectedResults {
-            token: String,
-            symbol: String,
-            max_price: f64,
-        }
-
         let results = dune
-            .get_latest_results::<ExpectedResults>(QUERY_ID)
+            .get_latest_results::<HashMap<String, serde_json::Value>>(QUERY_ID)
             .await
             .unwrap();
         let rows = results.result.rows;
         assert_eq!(1, rows.len());
-        assert_eq!(rows[0].symbol, "WETH");
+        assert_eq!(rows[0]["symbol"], "WETH");
     }
 
     #[tokio::test]
