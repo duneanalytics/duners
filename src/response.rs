@@ -6,7 +6,7 @@
 
 use crate::parse_utils::{datetime_from_str, optional_datetime_from_str};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use std::str::FromStr;
 
@@ -209,6 +209,50 @@ impl<T> GetResultResponse<T> {
     pub fn get_rows(self) -> Vec<T> {
         self.result.rows
     }
+}
+
+/// Response from query create, update, archive, unarchive, private, and unprivate endpoints.
+#[derive(Deserialize, Debug)]
+pub struct QueryResponse {
+    pub query_id: u32,
+}
+
+/// Full query object returned by `GET /v1/query/{queryId}`.
+#[derive(Deserialize, Debug)]
+pub struct DuneQuery {
+    pub query_id: u32,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub query_sql: String,
+    pub is_private: bool,
+    pub is_archived: bool,
+    #[serde(default)]
+    pub query_engine: Option<String>,
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub parameters: Option<Vec<serde_json::Value>>,
+}
+
+/// Request body for creating or updating a query.
+///
+/// For `create_query`, `name` and `query_sql` are required by the API.
+/// For `update_query`, all fields are optional.
+#[derive(Serialize, Debug, Default)]
+pub struct QueryBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_sql: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[cfg(test)]

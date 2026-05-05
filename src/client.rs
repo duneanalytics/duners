@@ -5,7 +5,8 @@
 use crate::error::{DuneError, DuneRequestError};
 use crate::parameters::Parameter;
 use crate::response::{
-    CancellationResponse, ExecutionResponse, ExecutionStatus, GetResultResponse, GetStatusResponse,
+    CancellationResponse, DuneQuery, ExecutionResponse, ExecutionStatus, GetResultResponse,
+    GetStatusResponse, QueryBody, QueryResponse,
 };
 use dotenvy::dotenv;
 use log::{debug, error, info, warn};
@@ -91,6 +92,23 @@ impl DuneClient {
         let client = reqwest::Client::new();
         client
             .post(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+    }
+
+    /// Internal PATCH request handler with JSON body
+    async fn _patch(
+        &self,
+        route: &str,
+        body: serde_json::Value,
+    ) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("PATCH to {} with body {:?}", route, &body);
+        let client = reqwest::Client::new();
+        client
+            .patch(&request_url)
             .header("x-dune-api-key", &self.api_key)
             .json(&body)
             .send()
@@ -279,6 +297,96 @@ impl DuneClient {
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_text_response(response).await
+    }
+
+    /// Create a new Dune query.
+    ///
+    /// `body.name` and `body.query_sql` are required by the API.
+    pub async fn create_query(
+        &self,
+        body: QueryBody,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json("query", serde_json::to_value(&body).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Read a query's metadata and SQL by ID.
+    pub async fn get_query(
+        &self,
+        query_id: u32,
+    ) -> Result<DuneQuery, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<DuneQuery>(response).await
+    }
+
+    /// Update a query's SQL, name, description, tags, or privacy.
+    pub async fn update_query(
+        &self,
+        query_id: u32,
+        body: QueryBody,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._patch(
+                &format!("query/{query_id}"),
+                serde_json::to_value(&body).unwrap(),
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Archive a query (prevents running or editing).
+    pub async fn archive_query(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/archive"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Unarchive a previously archived query.
+    pub async fn unarchive_query(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/unarchive"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Make a query private (owner-only access).
+    pub async fn make_query_private(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/private"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Make a private query public.
+    pub async fn make_query_public(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/unprivate"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
     }
 
     /// Convenience method for users to
@@ -473,6 +581,66 @@ mod tests {
             },
             results.get_rows()[0]
         )
+    }
+
+    #[tokio::test]
+    async fn query_crud_lifecycle() {
+        use crate::response::{QueryBody, QueryResponse};
+
+        let dune = DuneClient::from_env();
+
+        // Create
+        let created = dune
+            .create_query(QueryBody {
+                name: Some("duners test query".to_string()),
+                query_sql: Some("SELECT 1 AS n".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let qid = created.query_id;
+        assert!(qid > 0);
+
+        // Read
+        let query = dune.get_query(qid).await.unwrap();
+        assert_eq!(query.name, "duners test query");
+        assert_eq!(query.query_sql, "SELECT 1 AS n");
+
+        // Update
+        let updated = dune
+            .update_query(
+                qid,
+                QueryBody {
+                    name: Some("duners test query updated".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.query_id, qid);
+
+        // Make private
+        dune.make_query_private(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(query.is_private);
+
+        // Make public
+        dune.make_query_public(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(!query.is_private);
+
+        // Archive
+        dune.archive_query(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(query.is_archived);
+
+        // Unarchive
+        dune.unarchive_query(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(!query.is_archived);
+
+        // Clean up: archive again
+        dune.archive_query(qid).await.unwrap();
     }
 
     #[tokio::test]
