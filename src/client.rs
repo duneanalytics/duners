@@ -80,6 +80,23 @@ impl DuneClient {
             .await
     }
 
+    /// Internal POST request handler with arbitrary JSON body
+    async fn _post_json(
+        &self,
+        route: &str,
+        body: serde_json::Value,
+    ) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("POST to {} with body {:?}", route, &body);
+        let client = reqwest::Client::new();
+        client
+            .post(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+    }
+
     /// Internal GET request handler for arbitrary routes
     async fn _get_url(&self, route: &str) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
@@ -148,6 +165,26 @@ impl DuneClient {
     ) -> Result<ExecutionResponse, DuneRequestError> {
         let response = self
             ._post(&format!("query/{query_id}/execute"), params)
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<ExecutionResponse>(response).await
+    }
+
+    /// Execute raw SQL directly without a saved query.
+    ///
+    /// The `performance` parameter controls the execution tier:
+    /// `"medium"` (default), `"large"`, or `"community"`.
+    pub async fn execute_sql(
+        &self,
+        sql: &str,
+        performance: Option<&str>,
+    ) -> Result<ExecutionResponse, DuneRequestError> {
+        let mut body = json!({ "sql": sql });
+        if let Some(perf) = performance {
+            body["performance"] = json!(perf);
+        }
+        let response = self
+            ._post_json("sql/execute", body)
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_response::<ExecutionResponse>(response).await
@@ -436,6 +473,18 @@ mod tests {
             },
             results.get_rows()[0]
         )
+    }
+
+    #[tokio::test]
+    async fn execute_sql() {
+        let dune = DuneClient::from_env();
+        let exec = dune
+            .execute_sql("SELECT 1 AS n", None)
+            .await
+            .unwrap();
+        assert!(!exec.execution_id.is_empty());
+        let cancellation = dune.cancel_execution(&exec.execution_id).await.unwrap();
+        assert!(cancellation.success);
     }
 
     #[tokio::test]
