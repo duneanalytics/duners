@@ -52,4 +52,8 @@ pub mod response;
 pub use client::DuneClient;
 pub use error::DuneRequestError;
 pub use parameters::Parameter;
-pub use response::{DuneQuery, ExecutionStatus, GetResultResponse, QueryBody, QueryResponse};
+pub use response::{
+    ColumnDef, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionStatus,
+    GetResultResponse, InsertTableResponse, QueryBody, QueryResponse, SuccessResponse,
+    UploadCsvRequest,
+};

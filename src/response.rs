@@ -255,6 +255,74 @@ pub struct QueryBody {
     pub tags: Option<Vec<String>>,
 }
 
+/// Column definition for creating a table.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ColumnDef {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub column_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+}
+
+/// Request body for `POST /v1/uploads` (create empty table with schema).
+#[derive(Serialize, Debug)]
+pub struct CreateTableRequest {
+    pub namespace: String,
+    pub table_name: String,
+    pub schema: Vec<ColumnDef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+}
+
+/// Response from `POST /v1/uploads` and `POST /v1/uploads/csv`.
+#[derive(Deserialize, Debug)]
+pub struct CreateTableResponse {
+    #[serde(default)]
+    pub success: Option<bool>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub table_name: Option<String>,
+    #[serde(default)]
+    pub full_name: String,
+    #[serde(default)]
+    pub example_query: Option<String>,
+    #[serde(default)]
+    pub already_existed: Option<bool>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Request body for `POST /v1/uploads/csv`.
+#[derive(Serialize, Debug)]
+pub struct UploadCsvRequest {
+    pub data: String,
+    pub table_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+}
+
+/// Response from `POST /v1/uploads/{namespace}/{table_name}/insert`.
+#[derive(Deserialize, Debug)]
+pub struct InsertTableResponse {
+    pub rows_written: u64,
+    pub bytes_written: u64,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Generic success response with a message field (used by clear and delete table).
+#[derive(Deserialize, Debug)]
+pub struct SuccessResponse {
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,8 +5,9 @@
 use crate::error::{DuneError, DuneRequestError};
 use crate::parameters::Parameter;
 use crate::response::{
-    CancellationResponse, DuneQuery, ExecutionResponse, ExecutionStatus, GetResultResponse,
-    GetStatusResponse, QueryBody, QueryResponse,
+    CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
+    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse, QueryBody,
+    QueryResponse, SuccessResponse, UploadCsvRequest,
 };
 use dotenvy::dotenv;
 use log::{debug, error, info, warn};
@@ -146,6 +147,37 @@ impl DuneClient {
             error!("request error {:?}", &err);
             Err(DuneRequestError::from(err))
         }
+    }
+
+    /// Internal DELETE request handler
+    async fn _delete(&self, route: &str) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("DELETE {}", &request_url);
+        let client = reqwest::Client::new();
+        client
+            .delete(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .send()
+            .await
+    }
+
+    /// Internal POST request handler with raw body and custom content type
+    async fn _post_raw(
+        &self,
+        route: &str,
+        content_type: &str,
+        body: String,
+    ) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("POST raw to {} ({} bytes)", route, body.len());
+        let client = reqwest::Client::new();
+        client
+            .post(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
     }
 
     /// Parses response body as text (for CSV endpoints).
@@ -389,6 +421,80 @@ impl DuneClient {
         DuneClient::_parse_response::<QueryResponse>(response).await
     }
 
+    /// Create an empty table with an explicit schema.
+    pub async fn create_table(
+        &self,
+        request: CreateTableRequest,
+    ) -> Result<CreateTableResponse, DuneRequestError> {
+        let response = self
+            ._post_json("uploads", serde_json::to_value(&request).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<CreateTableResponse>(response).await
+    }
+
+    /// Upload CSV data to create or replace a table.
+    pub async fn upload_csv(
+        &self,
+        request: UploadCsvRequest,
+    ) -> Result<CreateTableResponse, DuneRequestError> {
+        let response = self
+            ._post_json("uploads/csv", serde_json::to_value(&request).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<CreateTableResponse>(response).await
+    }
+
+    /// Insert rows into an existing table.
+    ///
+    /// `content_type` should be `"text/csv"` or `"application/x-ndjson"`.
+    pub async fn insert_table_rows(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        content_type: &str,
+        data: String,
+    ) -> Result<InsertTableResponse, DuneRequestError> {
+        let response = self
+            ._post_raw(
+                &format!("uploads/{namespace}/{table_name}/insert"),
+                content_type,
+                data,
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<InsertTableResponse>(response).await
+    }
+
+    /// Remove all data from a table (preserves schema).
+    pub async fn clear_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<SuccessResponse, DuneRequestError> {
+        let response = self
+            ._post_json(
+                &format!("uploads/{namespace}/{table_name}/clear"),
+                json!({}),
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<SuccessResponse>(response).await
+    }
+
+    /// Permanently delete a table and all its data.
+    pub async fn delete_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<SuccessResponse, DuneRequestError> {
+        let response = self
+            ._delete(&format!("uploads/{namespace}/{table_name}"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<SuccessResponse>(response).await
+    }
+
     /// Convenience method for users to
     /// 1. execute,
     /// 2. wait for execution to complete,
@@ -584,8 +690,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn table_lifecycle() {
+        use crate::response::{ColumnDef, CreateTableRequest};
+
+        let dune = DuneClient::from_env();
+        let namespace = env::var("DUNE_NAMESPACE").unwrap_or_else(|_| "bh2smith".to_string());
+        let table_name = "duners_test_table";
+
+        // Create table with schema
+        let created = dune
+            .create_table(CreateTableRequest {
+                namespace: namespace.clone(),
+                table_name: table_name.to_string(),
+                schema: vec![
+                    ColumnDef { name: "name".to_string(), column_type: "varchar".to_string(), nullable: None },
+                    ColumnDef { name: "age".to_string(), column_type: "integer".to_string(), nullable: None },
+                ],
+                description: None,
+                is_private: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(!created.full_name.is_empty());
+
+        // Insert rows via CSV
+        let inserted = dune
+            .insert_table_rows(
+                &namespace,
+                table_name,
+                "text/csv",
+                "name,age\nAlice,30\nBob,25".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(inserted.rows_written, 2);
+
+        // Clear table
+        let cleared = dune.clear_table(&namespace, table_name).await.unwrap();
+        assert!(cleared.message.is_some());
+
+        // Delete table
+        let deleted = dune.delete_table(&namespace, table_name).await.unwrap();
+        assert!(deleted.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn upload_csv_lifecycle() {
+        use crate::response::UploadCsvRequest;
+
+        let dune = DuneClient::from_env();
+        let namespace = env::var("DUNE_NAMESPACE").unwrap_or_else(|_| "bh2smith".to_string());
+
+        // Upload CSV (creates the table)
+        let upload = dune
+            .upload_csv(UploadCsvRequest {
+                data: "name,age\nAlice,30\nBob,25".to_string(),
+                table_name: "duners_csv_test".to_string(),
+                description: None,
+                is_private: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(!upload.full_name.is_empty());
+
+        // Clean up
+        let actual_table = upload.table_name.as_deref().unwrap_or("duners_csv_test");
+        dune.delete_table(&namespace, actual_table).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn query_crud_lifecycle() {
-        use crate::response::{QueryBody, QueryResponse};
+        use crate::response::QueryBody;
 
         let dune = DuneClient::from_env();
 
