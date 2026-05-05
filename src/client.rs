@@ -80,9 +80,9 @@ impl DuneClient {
             .await
     }
 
-    /// Internal GET request handler
-    async fn _get(&self, job_id: &str, command: &str) -> Result<Response, Error> {
-        let request_url = format!("{BASE_URL}/execution/{job_id}/{command}");
+    /// Internal GET request handler for arbitrary routes
+    async fn _get_url(&self, route: &str) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
         debug!("GET from {}", &request_url);
         let client = reqwest::Client::new();
         client
@@ -92,11 +92,31 @@ impl DuneClient {
             .await
     }
 
+    /// Internal GET request handler for execution endpoints
+    async fn _get(&self, job_id: &str, command: &str) -> Result<Response, Error> {
+        self._get_url(&format!("execution/{job_id}/{command}"))
+            .await
+    }
+
     /// Deserializes Responses into appropriate type.
     /// Some "invalid" requests return response JSON, which are parsed and returned as Errors.
     async fn _parse_response<T: DeserializeOwned>(resp: Response) -> Result<T, DuneRequestError> {
         if resp.status().is_success() {
             resp.json::<T>().await.map_err(DuneRequestError::from)
+        } else {
+            let err = resp
+                .json::<DuneError>()
+                .await
+                .map_err(DuneRequestError::from)?;
+            error!("request error {:?}", &err);
+            Err(DuneRequestError::from(err))
+        }
+    }
+
+    /// Parses response body as text (for CSV endpoints).
+    async fn _parse_text_response(resp: Response) -> Result<String, DuneRequestError> {
+        if resp.status().is_success() {
+            resp.text().await.map_err(DuneRequestError::from)
         } else {
             let err = resp
                 .json::<DuneError>()
@@ -183,6 +203,45 @@ impl DuneClient {
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_response::<GetResultResponse<T>>(response).await
+    }
+
+    /// Get the latest results for a query without triggering a new execution.
+    ///
+    /// Returns the most recent execution results for the given query ID.
+    /// Does not consume credits (no re-execution).
+    pub async fn get_latest_results<T: DeserializeOwned>(
+        &self,
+        query_id: u32,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}/results"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<GetResultResponse<T>>(response).await
+    }
+
+    /// Get the latest results for a query as CSV text.
+    pub async fn get_latest_results_csv(
+        &self,
+        query_id: u32,
+    ) -> Result<String, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}/results/csv"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_text_response(response).await
+    }
+
+    /// Get execution results as CSV text (by `job_id`).
+    pub async fn get_results_csv(
+        &self,
+        job_id: &str,
+    ) -> Result<String, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("execution/{job_id}/results/csv"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_text_response(response).await
     }
 
     /// Convenience method for users to
@@ -377,6 +436,42 @@ mod tests {
             },
             results.get_rows()[0]
         )
+    }
+
+    #[tokio::test]
+    async fn get_latest_results() {
+        let dune = DuneClient::from_env();
+
+        #[derive(Deserialize, Debug)]
+        struct ExpectedResults {
+            token: String,
+            symbol: String,
+            max_price: f64,
+        }
+
+        let results = dune
+            .get_latest_results::<ExpectedResults>(QUERY_ID)
+            .await
+            .unwrap();
+        let rows = results.result.rows;
+        assert_eq!(1, rows.len());
+        assert_eq!(rows[0].symbol, "WETH");
+    }
+
+    #[tokio::test]
+    async fn get_latest_results_csv() {
+        let dune = DuneClient::from_env();
+        let csv = dune.get_latest_results_csv(QUERY_ID).await.unwrap();
+        assert!(csv.contains("token"));
+        assert!(csv.contains("WETH"));
+    }
+
+    #[tokio::test]
+    async fn get_results_csv() {
+        let dune = DuneClient::from_env();
+        let csv = dune.get_results_csv(JOB_ID).await.unwrap();
+        assert!(csv.contains("token"));
+        assert!(csv.contains("WETH"));
     }
 
     #[tokio::test]
