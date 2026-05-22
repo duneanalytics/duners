@@ -6,7 +6,7 @@
 
 use crate::parse_utils::{datetime_from_str, optional_datetime_from_str};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use std::str::FromStr;
 
@@ -209,6 +209,230 @@ impl<T> GetResultResponse<T> {
     pub fn get_rows(self) -> Vec<T> {
         self.result.rows
     }
+}
+
+/// Response from query create, update, archive, unarchive, private, and unprivate endpoints.
+///
+/// # Example
+///
+/// ```no_run
+/// use duners::{DuneClient, DuneRequestError, QueryBody};
+///
+/// # async fn run() -> Result<(), DuneRequestError> {
+/// let client = DuneClient::from_env();
+/// let resp = client.create_query(QueryBody {
+///     name: Some("My query".into()),
+///     query_sql: Some("SELECT 1".into()),
+///     ..Default::default()
+/// }).await?;
+/// println!("Created query {}", resp.query_id);
+/// # Ok(()) }
+/// ```
+#[derive(Deserialize, Debug)]
+pub struct QueryResponse {
+    /// The Dune query ID.
+    pub query_id: u32,
+}
+
+/// Full query object returned by `GET /v1/query/{queryId}`.
+///
+/// # Example
+///
+/// ```no_run
+/// use duners::{DuneClient, DuneRequestError};
+///
+/// # async fn run() -> Result<(), DuneRequestError> {
+/// let client = DuneClient::from_env();
+/// let query = client.get_query(971694).await?;
+/// println!("{}: {}", query.name, query.query_sql);
+/// # Ok(()) }
+/// ```
+#[derive(Deserialize, Debug)]
+pub struct DuneQuery {
+    /// The Dune query ID.
+    pub query_id: u32,
+    /// Human-readable query name.
+    pub name: String,
+    /// Optional description of the query.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The SQL text of the query.
+    pub query_sql: String,
+    /// Whether the query is private (owner-only).
+    pub is_private: bool,
+    /// Whether the query is archived.
+    pub is_archived: bool,
+    /// SQL engine used (e.g. `"medium"`).
+    #[serde(default)]
+    pub query_engine: Option<String>,
+    /// Query version number.
+    #[serde(default)]
+    pub version: Option<u32>,
+    /// User-defined tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Query parameters defined in the Dune editor.
+    #[serde(default)]
+    pub parameters: Option<Vec<serde_json::Value>>,
+}
+
+/// Request body for creating or updating a query.
+///
+/// For [`create_query`](crate::client::DuneClient::create_query), `name` and `query_sql` are required by the API.
+/// For [`update_query`](crate::client::DuneClient::update_query), all fields are optional.
+///
+/// # Example
+///
+/// ```rust
+/// use duners::QueryBody;
+///
+/// let body = QueryBody {
+///     name: Some("My query".into()),
+///     query_sql: Some("SELECT 1 AS n".into()),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Serialize, Debug, Default)]
+pub struct QueryBody {
+    /// Query name (required for create).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// SQL text (required for create).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_sql: Option<String>,
+    /// Optional description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the query should be private.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+    /// User-defined tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
+/// Column definition for creating a table.
+///
+/// # Example
+///
+/// ```rust
+/// use duners::ColumnDef;
+///
+/// let col = ColumnDef {
+///     name: "price".into(),
+///     column_type: "double".into(),
+///     nullable: Some(true),
+/// };
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ColumnDef {
+    /// Column name.
+    pub name: String,
+    /// Dune column type (e.g. `"varchar"`, `"integer"`, `"double"`, `"boolean"`).
+    #[serde(rename = "type")]
+    pub column_type: String,
+    /// Whether the column accepts NULL values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+}
+
+/// Request body for `POST /v1/uploads` (create empty table with schema).
+///
+/// # Example
+///
+/// ```no_run
+/// use duners::{DuneClient, DuneRequestError, CreateTableRequest, ColumnDef};
+///
+/// # async fn run() -> Result<(), DuneRequestError> {
+/// let client = DuneClient::from_env();
+/// let resp = client.create_table(CreateTableRequest {
+///     namespace: "my_team".into(),
+///     table_name: "prices".into(),
+///     schema: vec![
+///         ColumnDef { name: "symbol".into(), column_type: "varchar".into(), nullable: None },
+///         ColumnDef { name: "price".into(), column_type: "double".into(), nullable: None },
+///     ],
+///     description: None,
+///     is_private: Some(true),
+/// }).await?;
+/// println!("Created: {}", resp.full_name);
+/// # Ok(()) }
+/// ```
+#[derive(Serialize, Debug)]
+pub struct CreateTableRequest {
+    /// Dune namespace (usually your username or team name).
+    pub namespace: String,
+    /// Table name.
+    pub table_name: String,
+    /// Column definitions.
+    pub schema: Vec<ColumnDef>,
+    /// Optional table description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the table should be private.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+}
+
+/// Response from `POST /v1/uploads` and `POST /v1/uploads/csv`.
+#[derive(Deserialize, Debug)]
+pub struct CreateTableResponse {
+    /// Whether the operation succeeded (present for CSV uploads).
+    #[serde(default)]
+    pub success: Option<bool>,
+    /// Dune namespace.
+    #[serde(default)]
+    pub namespace: Option<String>,
+    /// Table name (may include a `dataset_` prefix for CSV uploads).
+    #[serde(default)]
+    pub table_name: Option<String>,
+    /// Fully qualified table name (e.g. `dune.my_team.my_table`).
+    #[serde(default)]
+    pub full_name: String,
+    /// Example SQL query to read from this table.
+    #[serde(default)]
+    pub example_query: Option<String>,
+    /// Whether the table already existed before this call.
+    #[serde(default)]
+    pub already_existed: Option<bool>,
+    /// Additional message from the API.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Request body for `POST /v1/uploads/csv`.
+#[derive(Serialize, Debug)]
+pub struct UploadCsvRequest {
+    /// CSV content as a string (including header row).
+    pub data: String,
+    /// Table name to create or replace.
+    pub table_name: String,
+    /// Optional table description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the table should be private.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+}
+
+/// Response from `POST /v1/uploads/{namespace}/{table_name}/insert`.
+#[derive(Deserialize, Debug)]
+pub struct InsertTableResponse {
+    /// Number of rows written.
+    pub rows_written: u64,
+    /// Total bytes written.
+    pub bytes_written: u64,
+    /// Table name.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Generic success response with a message field (used by clear and delete table).
+#[derive(Deserialize, Debug)]
+pub struct SuccessResponse {
+    /// Human-readable message from the API.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 #[cfg(test)]

@@ -5,7 +5,9 @@
 use crate::error::{DuneError, DuneRequestError};
 use crate::parameters::Parameter;
 use crate::response::{
-    CancellationResponse, ExecutionResponse, ExecutionStatus, GetResultResponse, GetStatusResponse,
+    CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
+    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse, QueryBody,
+    QueryResponse, SuccessResponse, UploadCsvRequest,
 };
 use dotenvy::dotenv;
 use log::{debug, error, info, warn};
@@ -80,9 +82,35 @@ impl DuneClient {
             .await
     }
 
-    /// Internal GET request handler
-    async fn _get(&self, job_id: &str, command: &str) -> Result<Response, Error> {
-        let request_url = format!("{BASE_URL}/execution/{job_id}/{command}");
+    /// Internal POST request handler with arbitrary JSON body
+    async fn _post_json(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("POST to {} with body {:?}", route, &body);
+        let client = reqwest::Client::new();
+        client
+            .post(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+    }
+
+    /// Internal PATCH request handler with JSON body
+    async fn _patch(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("PATCH to {} with body {:?}", route, &body);
+        let client = reqwest::Client::new();
+        client
+            .patch(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+    }
+
+    /// Internal GET request handler for arbitrary routes
+    async fn _get_url(&self, route: &str) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
         debug!("GET from {}", &request_url);
         let client = reqwest::Client::new();
         client
@@ -92,11 +120,62 @@ impl DuneClient {
             .await
     }
 
+    /// Internal GET request handler for execution endpoints
+    async fn _get(&self, job_id: &str, command: &str) -> Result<Response, Error> {
+        self._get_url(&format!("execution/{job_id}/{command}"))
+            .await
+    }
+
     /// Deserializes Responses into appropriate type.
     /// Some "invalid" requests return response JSON, which are parsed and returned as Errors.
     async fn _parse_response<T: DeserializeOwned>(resp: Response) -> Result<T, DuneRequestError> {
         if resp.status().is_success() {
             resp.json::<T>().await.map_err(DuneRequestError::from)
+        } else {
+            let err = resp
+                .json::<DuneError>()
+                .await
+                .map_err(DuneRequestError::from)?;
+            error!("request error {:?}", &err);
+            Err(DuneRequestError::from(err))
+        }
+    }
+
+    /// Internal DELETE request handler
+    async fn _delete(&self, route: &str) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("DELETE {}", &request_url);
+        let client = reqwest::Client::new();
+        client
+            .delete(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .send()
+            .await
+    }
+
+    /// Internal POST request handler with raw body and custom content type
+    async fn _post_raw(
+        &self,
+        route: &str,
+        content_type: &str,
+        body: String,
+    ) -> Result<Response, Error> {
+        let request_url = format!("{BASE_URL}/{route}");
+        debug!("POST raw to {} ({} bytes)", route, body.len());
+        let client = reqwest::Client::new();
+        client
+            .post(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
+    }
+
+    /// Parses response body as text (for CSV endpoints).
+    async fn _parse_text_response(resp: Response) -> Result<String, DuneRequestError> {
+        if resp.status().is_success() {
+            resp.text().await.map_err(DuneRequestError::from)
         } else {
             let err = resp
                 .json::<DuneError>()
@@ -128,6 +207,38 @@ impl DuneClient {
     ) -> Result<ExecutionResponse, DuneRequestError> {
         let response = self
             ._post(&format!("query/{query_id}/execute"), params)
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<ExecutionResponse>(response).await
+    }
+
+    /// Execute raw SQL directly without a saved query.
+    ///
+    /// The `performance` parameter controls the execution tier:
+    /// `"medium"` (default), `"large"`, or `"community"`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let exec = client.execute_sql("SELECT 1 AS n", None).await?;
+    /// println!("Execution ID: {}", exec.execution_id);
+    /// # Ok(()) }
+    /// ```
+    pub async fn execute_sql(
+        &self,
+        sql: &str,
+        performance: Option<&str>,
+    ) -> Result<ExecutionResponse, DuneRequestError> {
+        let mut body = json!({ "sql": sql });
+        if let Some(perf) = performance {
+            body["performance"] = json!(perf);
+        }
+        let response = self
+            ._post_json("sql/execute", body)
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_response::<ExecutionResponse>(response).await
@@ -183,6 +294,240 @@ impl DuneClient {
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_response::<GetResultResponse<T>>(response).await
+    }
+
+    /// Get the latest results for a query without triggering a new execution.
+    ///
+    /// Returns the most recent execution results for the given query ID.
+    /// Does not consume credits (no re-execution).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize, Debug)]
+    /// struct Row { symbol: String, price: f64 }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let results = client.get_latest_results::<Row>(971694).await?;
+    /// for row in results.get_rows() { println!("{:?}", row); }
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_latest_results<T: DeserializeOwned>(
+        &self,
+        query_id: u32,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}/results"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<GetResultResponse<T>>(response).await
+    }
+
+    /// Get the latest results for a query as CSV text.
+    pub async fn get_latest_results_csv(&self, query_id: u32) -> Result<String, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}/results/csv"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_text_response(response).await
+    }
+
+    /// Get execution results as CSV text (by `job_id`).
+    pub async fn get_results_csv(&self, job_id: &str) -> Result<String, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("execution/{job_id}/results/csv"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_text_response(response).await
+    }
+
+    /// Create a new Dune query.
+    ///
+    /// `body.name` and `body.query_sql` are required by the API.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError, QueryBody};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let resp = client.create_query(QueryBody {
+    ///     name: Some("My query".into()),
+    ///     query_sql: Some("SELECT 1 AS n".into()),
+    ///     ..Default::default()
+    /// }).await?;
+    /// println!("Query ID: {}", resp.query_id);
+    /// # Ok(()) }
+    /// ```
+    pub async fn create_query(&self, body: QueryBody) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json("query", serde_json::to_value(&body).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Read a query's metadata and SQL by ID.
+    pub async fn get_query(&self, query_id: u32) -> Result<DuneQuery, DuneRequestError> {
+        let response = self
+            ._get_url(&format!("query/{query_id}"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<DuneQuery>(response).await
+    }
+
+    /// Update a query's SQL, name, description, tags, or privacy.
+    pub async fn update_query(
+        &self,
+        query_id: u32,
+        body: QueryBody,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._patch(
+                &format!("query/{query_id}"),
+                serde_json::to_value(&body).unwrap(),
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Archive a query (prevents running or editing).
+    pub async fn archive_query(&self, query_id: u32) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/archive"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Unarchive a previously archived query.
+    pub async fn unarchive_query(&self, query_id: u32) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/unarchive"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Make a query private (owner-only access).
+    pub async fn make_query_private(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/private"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Make a private query public.
+    pub async fn make_query_public(
+        &self,
+        query_id: u32,
+    ) -> Result<QueryResponse, DuneRequestError> {
+        let response = self
+            ._post_json(&format!("query/{query_id}/unprivate"), json!({}))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<QueryResponse>(response).await
+    }
+
+    /// Create an empty table with an explicit schema.
+    pub async fn create_table(
+        &self,
+        request: CreateTableRequest,
+    ) -> Result<CreateTableResponse, DuneRequestError> {
+        let response = self
+            ._post_json("uploads", serde_json::to_value(&request).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<CreateTableResponse>(response).await
+    }
+
+    /// Upload CSV data to create or replace a table.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError, UploadCsvRequest};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let resp = client.upload_csv(UploadCsvRequest {
+    ///     data: "name,age\nAlice,30\nBob,25".into(),
+    ///     table_name: "my_table".into(),
+    ///     description: None,
+    ///     is_private: Some(true),
+    /// }).await?;
+    /// println!("Table: {}", resp.full_name);
+    /// # Ok(()) }
+    /// ```
+    pub async fn upload_csv(
+        &self,
+        request: UploadCsvRequest,
+    ) -> Result<CreateTableResponse, DuneRequestError> {
+        let response = self
+            ._post_json("uploads/csv", serde_json::to_value(&request).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<CreateTableResponse>(response).await
+    }
+
+    /// Insert rows into an existing table.
+    ///
+    /// `content_type` should be `"text/csv"` or `"application/x-ndjson"`.
+    pub async fn insert_table_rows(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        content_type: &str,
+        data: String,
+    ) -> Result<InsertTableResponse, DuneRequestError> {
+        let response = self
+            ._post_raw(
+                &format!("uploads/{namespace}/{table_name}/insert"),
+                content_type,
+                data,
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<InsertTableResponse>(response).await
+    }
+
+    /// Remove all data from a table (preserves schema).
+    pub async fn clear_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<SuccessResponse, DuneRequestError> {
+        let response = self
+            ._post_json(
+                &format!("uploads/{namespace}/{table_name}/clear"),
+                json!({}),
+            )
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<SuccessResponse>(response).await
+    }
+
+    /// Permanently delete a table and all its data.
+    pub async fn delete_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<SuccessResponse, DuneRequestError> {
+        let response = self
+            ._delete(&format!("uploads/{namespace}/{table_name}"))
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<SuccessResponse>(response).await
     }
 
     /// Convenience method for users to
@@ -377,6 +722,181 @@ mod tests {
             },
             results.get_rows()[0]
         )
+    }
+
+    #[tokio::test]
+    async fn table_lifecycle() {
+        use crate::response::{ColumnDef, CreateTableRequest};
+
+        let dune = DuneClient::from_env();
+        let namespace = env::var("DUNE_NAMESPACE").unwrap_or_else(|_| "bh2smith".to_string());
+        let table_name = "duners_test_table";
+
+        // Create table with schema
+        let created = dune
+            .create_table(CreateTableRequest {
+                namespace: namespace.clone(),
+                table_name: table_name.to_string(),
+                schema: vec![
+                    ColumnDef {
+                        name: "name".to_string(),
+                        column_type: "varchar".to_string(),
+                        nullable: None,
+                    },
+                    ColumnDef {
+                        name: "age".to_string(),
+                        column_type: "integer".to_string(),
+                        nullable: None,
+                    },
+                ],
+                description: None,
+                is_private: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(!created.full_name.is_empty());
+
+        // Insert rows via CSV
+        let inserted = dune
+            .insert_table_rows(
+                &namespace,
+                table_name,
+                "text/csv",
+                "name,age\nAlice,30\nBob,25".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(inserted.rows_written, 2);
+
+        // Clear table
+        let cleared = dune.clear_table(&namespace, table_name).await.unwrap();
+        assert!(cleared.message.is_some());
+
+        // Delete table
+        let deleted = dune.delete_table(&namespace, table_name).await.unwrap();
+        assert!(deleted.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn upload_csv_lifecycle() {
+        use crate::response::UploadCsvRequest;
+
+        let dune = DuneClient::from_env();
+        let namespace = env::var("DUNE_NAMESPACE").unwrap_or_else(|_| "bh2smith".to_string());
+
+        // Upload CSV (creates the table)
+        let upload = dune
+            .upload_csv(UploadCsvRequest {
+                data: "name,age\nAlice,30\nBob,25".to_string(),
+                table_name: "duners_csv_test".to_string(),
+                description: None,
+                is_private: Some(true),
+            })
+            .await
+            .unwrap();
+        assert!(!upload.full_name.is_empty());
+
+        // Clean up
+        let actual_table = upload.table_name.as_deref().unwrap_or("duners_csv_test");
+        dune.delete_table(&namespace, actual_table).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn query_crud_lifecycle() {
+        use crate::response::QueryBody;
+
+        let dune = DuneClient::from_env();
+
+        // Create
+        let created = dune
+            .create_query(QueryBody {
+                name: Some("duners test query".to_string()),
+                query_sql: Some("SELECT 1 AS n".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let qid = created.query_id;
+        assert!(qid > 0);
+
+        // Read
+        let query = dune.get_query(qid).await.unwrap();
+        assert_eq!(query.name, "duners test query");
+        assert_eq!(query.query_sql, "SELECT 1 AS n");
+
+        // Update
+        let updated = dune
+            .update_query(
+                qid,
+                QueryBody {
+                    name: Some("duners test query updated".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.query_id, qid);
+
+        // Make private
+        dune.make_query_private(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(query.is_private);
+
+        // Make public
+        dune.make_query_public(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(!query.is_private);
+
+        // Archive
+        dune.archive_query(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(query.is_archived);
+
+        // Unarchive
+        dune.unarchive_query(qid).await.unwrap();
+        let query = dune.get_query(qid).await.unwrap();
+        assert!(!query.is_archived);
+
+        // Clean up: archive again
+        dune.archive_query(qid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn execute_sql() {
+        let dune = DuneClient::from_env();
+        let exec = dune.execute_sql("SELECT 1 AS n", None).await.unwrap();
+        assert!(!exec.execution_id.is_empty());
+        let cancellation = dune.cancel_execution(&exec.execution_id).await.unwrap();
+        assert!(cancellation.success);
+    }
+
+    #[tokio::test]
+    async fn get_latest_results() {
+        let dune = DuneClient::from_env();
+
+        let results = dune
+            .get_latest_results::<HashMap<String, serde_json::Value>>(QUERY_ID)
+            .await
+            .unwrap();
+        let rows = results.result.rows;
+        assert_eq!(1, rows.len());
+        assert_eq!(rows[0]["symbol"], "WETH");
+    }
+
+    #[tokio::test]
+    async fn get_latest_results_csv() {
+        let dune = DuneClient::from_env();
+        let csv = dune.get_latest_results_csv(QUERY_ID).await.unwrap();
+        assert!(csv.contains("token"));
+        assert!(csv.contains("WETH"));
+    }
+
+    #[tokio::test]
+    async fn get_results_csv() {
+        let dune = DuneClient::from_env();
+        let csv = dune.get_results_csv(JOB_ID).await.unwrap();
+        assert!(csv.contains("token"));
+        assert!(csv.contains("WETH"));
     }
 
     #[tokio::test]
