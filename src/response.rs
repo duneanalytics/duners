@@ -172,7 +172,9 @@ pub struct GetResultResponse<T> {
     /// Execution ID for this result.
     pub execution_id: String,
     /// The Dune query ID that was executed.
-    pub query_id: u32,
+    /// `None` for raw-SQL executions (see `DuneClient::execute_sql`), which have no saved query.
+    #[serde(default)]
+    pub query_id: Option<u32>,
     /// Optional flag indicating whether execution is finished.
     #[serde(default)]
     pub is_execution_finished: Option<bool>,
@@ -553,7 +555,7 @@ mod tests {
                 "{:?}",
                 GetResultResponse {
                     execution_id: execution_id.to_string(),
-                    query_id,
+                    query_id: Some(query_id),
                     is_execution_finished: None,
                     state: ExecutionStatus::Complete,
                     times: ExecutionTimes {
@@ -581,7 +583,7 @@ mod tests {
             ),
             "GetResultResponse { \
                 execution_id: \"jerb ID\", \
-                query_id: 71, \
+                query_id: Some(71), \
                 is_execution_finished: None, \
                 state: Complete, \
                 times: ExecutionTimes { \

@@ -604,9 +604,51 @@ mod tests {
     use crate::response::ExecutionStatus;
     use chrono::{DateTime, Utc};
     use serde::Deserialize;
+    use tokio::sync::OnceCell;
 
     const QUERY_ID: u32 = 971694;
-    const JOB_ID: &str = "01KTXBGJ67Z1TFN8WSJ2Q7299A";
+    // Long-running query (also used by `long_running_query`): slow enough that a
+    // cancellation request reliably lands while it is still executing.
+    const SLOW_QUERY_ID: u32 = 1229120;
+
+    async fn wait_for_completion(dune: &DuneClient, job_id: &str) {
+        let mut status = dune.get_status(job_id).await.unwrap();
+        while !status.state.is_terminal() {
+            sleep(Duration::from_secs(1)).await;
+            status = dune.get_status(job_id).await.unwrap();
+        }
+        assert_eq!(status.state, ExecutionStatus::Complete);
+    }
+
+    /// A completed execution created fresh for this test run and shared across tests.
+    /// Hardcoded job IDs rot: Dune expires execution results after a retention period.
+    async fn fresh_job_id(dune: &DuneClient) -> &'static str {
+        static JOB: OnceCell<String> = OnceCell::const_new();
+        JOB.get_or_init(|| async {
+            let exec = dune
+                .execute_sql(
+                    "SELECT '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2' AS token, \
+                     'WETH' AS symbol, CAST(4200.5 AS double) AS max_price",
+                    None,
+                )
+                .await
+                .unwrap();
+            wait_for_completion(dune, &exec.execution_id).await;
+            exec.execution_id
+        })
+        .await
+    }
+
+    /// Ensures QUERY_ID has a fresh, completed latest execution; without this, the
+    /// latest-results endpoints fail once the previous execution's results expire.
+    async fn ensure_latest_execution(dune: &DuneClient) {
+        static DONE: OnceCell<()> = OnceCell::const_new();
+        DONE.get_or_init(|| async {
+            let exec = dune.execute_query(QUERY_ID, None).await.unwrap();
+            wait_for_completion(dune, &exec.execution_id).await;
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn invalid_api_key() {
@@ -646,8 +688,10 @@ mod tests {
     #[tokio::test]
     async fn execute_query() {
         let dune = DuneClient::from_env();
-        let exec = dune.execute_query(QUERY_ID, None).await.unwrap();
-        // Also testing cancellation!
+        // Also testing cancellation! Uses SLOW_QUERY_ID: cancelling QUERY_ID here
+        // would race with the latest-results tests reading that same query, and a
+        // fast query can finish before the cancellation arrives.
+        let exec = dune.execute_query(SLOW_QUERY_ID, None).await.unwrap();
         let cancellation = dune.cancel_execution(&exec.execution_id).await.unwrap();
         assert!(cancellation.success);
     }
@@ -668,7 +712,8 @@ mod tests {
     #[tokio::test]
     async fn get_status() {
         let dune = DuneClient::from_env();
-        let status = dune.get_status(JOB_ID).await.unwrap();
+        let job_id = fresh_job_id(&dune).await;
+        let status = dune.get_status(job_id).await.unwrap();
         assert_eq!(status.state, ExecutionStatus::Complete)
     }
 
@@ -683,13 +728,13 @@ mod tests {
             max_price: f64,
         }
 
-        let results = dune.get_results::<ExpectedResults>(JOB_ID).await.unwrap();
-        // Query is for the max ETH price (should only have 1 result)
+        let job_id = fresh_job_id(&dune).await;
+        let results = dune.get_results::<ExpectedResults>(job_id).await.unwrap();
         let rows = results.result.rows;
         assert_eq!(1, rows.len());
         assert_eq!(rows[0].symbol, "WETH");
         assert_eq!(rows[0].token, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
-        assert!(rows[0].max_price > 4148.0)
+        assert_eq!(rows[0].max_price, 4200.5)
     }
 
     #[tokio::test]
@@ -864,16 +909,16 @@ mod tests {
     #[tokio::test]
     async fn execute_sql() {
         let dune = DuneClient::from_env();
+        // No cancellation here: this query finishes so fast that cancelling races
+        // ("execution ID not found"); cancellation is covered by `execute_query`.
         let exec = dune.execute_sql("SELECT 1 AS n", None).await.unwrap();
         assert!(!exec.execution_id.is_empty());
-        let cancellation = dune.cancel_execution(&exec.execution_id).await.unwrap();
-        assert!(cancellation.success);
     }
 
     #[tokio::test]
     async fn get_latest_results() {
         let dune = DuneClient::from_env();
-
+        ensure_latest_execution(&dune).await;
         let results = dune
             .get_latest_results::<HashMap<String, serde_json::Value>>(QUERY_ID)
             .await
@@ -886,6 +931,7 @@ mod tests {
     #[tokio::test]
     async fn get_latest_results_csv() {
         let dune = DuneClient::from_env();
+        ensure_latest_execution(&dune).await;
         let csv = dune.get_latest_results_csv(QUERY_ID).await.unwrap();
         assert!(csv.contains("token"));
         assert!(csv.contains("WETH"));
@@ -894,7 +940,8 @@ mod tests {
     #[tokio::test]
     async fn get_results_csv() {
         let dune = DuneClient::from_env();
-        let csv = dune.get_results_csv(JOB_ID).await.unwrap();
+        let job_id = fresh_job_id(&dune).await;
+        let csv = dune.get_results_csv(job_id).await.unwrap();
         assert!(csv.contains("token"));
         assert!(csv.contains("WETH"));
     }
@@ -904,7 +951,7 @@ mod tests {
     async fn long_running_query() {
         let dune = DuneClient::from_env();
         let results = dune
-            .refresh::<HashMap<String, f64>>(1229120, None, None)
+            .refresh::<HashMap<String, f64>>(SLOW_QUERY_ID, None, None)
             .await
             .unwrap();
         println!("Job ID {:?}", results.execution_id);
