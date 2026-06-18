@@ -34,7 +34,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
+        # NOTE: dtolnay/rust-toolchain encodes the toolchain channel in the git
+        # ref (e.g. @nightly, @stable, @1.XX.Y), so it is the documented
+        # exception to SHA-pinning. Nightly is required here for
+        # `cargo +nightly rustdoc -Z unstable-options --show-coverage`. Do not
+        # replace this ref with a commit SHA.
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-docs
       - name: Cache Cargo dependencies
