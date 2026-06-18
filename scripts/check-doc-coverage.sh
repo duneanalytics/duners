@@ -26,10 +26,13 @@ if [[ -n "${DOC_COVERAGE_OUTPUT:-}" ]]; then
   echo "Using existing coverage output: $DOC_COVERAGE_OUTPUT"
   COVERAGE_OUTPUT="$DOC_COVERAGE_OUTPUT"
 else
-  echo "Running rustdoc coverage (nightly)..."
+  # CI pins a known-good nightly via NIGHTLY_TOOLCHAIN for reproducibility;
+  # defaults to the floating nightly channel for local use.
+  NIGHTLY_TOOLCHAIN="${NIGHTLY_TOOLCHAIN:-nightly}"
+  echo "Running rustdoc coverage (+${NIGHTLY_TOOLCHAIN})..."
   COVERAGE_OUTPUT=$(mktemp)
   trap 'rm -f "$COVERAGE_OUTPUT"' EXIT
-  cargo +nightly rustdoc -Z unstable-options -- -Z unstable-options --show-coverage 2>&1 | tee "$COVERAGE_OUTPUT"
+  cargo "+${NIGHTLY_TOOLCHAIN}" rustdoc -Z unstable-options -- -Z unstable-options --show-coverage 2>&1 | tee "$COVERAGE_OUTPUT"
 fi
 
 TOTAL_LINE=$(grep '| Total ' "$COVERAGE_OUTPUT" || true)
