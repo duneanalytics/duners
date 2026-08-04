@@ -72,7 +72,7 @@ impl DuneClient {
             .map(|p| (p.key, p.value))
             .collect::<HashMap<_, _>>();
         let request_url = format!("{BASE_URL}/{route}");
-        debug!("POST to {} with parameters {:?}", route, &params);
+        debug!("POST to {} with parameters {:?}", route, params);
         let client = reqwest::Client::new();
         client
             .post(&request_url)
@@ -85,7 +85,7 @@ impl DuneClient {
     /// Internal POST request handler with arbitrary JSON body
     async fn _post_json(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
-        debug!("POST to {} with body {:?}", route, &body);
+        debug!("POST to {} with body {:?}", route, body);
         let client = reqwest::Client::new();
         client
             .post(&request_url)
@@ -98,7 +98,7 @@ impl DuneClient {
     /// Internal PATCH request handler with JSON body
     async fn _patch(&self, route: &str, body: serde_json::Value) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
-        debug!("PATCH to {} with body {:?}", route, &body);
+        debug!("PATCH to {} with body {:?}", route, body);
         let client = reqwest::Client::new();
         client
             .patch(&request_url)
@@ -111,7 +111,7 @@ impl DuneClient {
     /// Internal GET request handler for arbitrary routes
     async fn _get_url(&self, route: &str) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
-        debug!("GET from {}", &request_url);
+        debug!("GET from {}", request_url);
         let client = reqwest::Client::new();
         client
             .get(&request_url)
@@ -136,7 +136,7 @@ impl DuneClient {
                 .json::<DuneError>()
                 .await
                 .map_err(DuneRequestError::from)?;
-            error!("request error {:?}", &err);
+            error!("request error {:?}", err);
             Err(DuneRequestError::from(err))
         }
     }
@@ -144,7 +144,7 @@ impl DuneClient {
     /// Internal DELETE request handler
     async fn _delete(&self, route: &str) -> Result<Response, Error> {
         let request_url = format!("{BASE_URL}/{route}");
-        debug!("DELETE {}", &request_url);
+        debug!("DELETE {}", request_url);
         let client = reqwest::Client::new();
         client
             .delete(&request_url)
@@ -181,7 +181,7 @@ impl DuneClient {
                 .json::<DuneError>()
                 .await
                 .map_err(DuneRequestError::from)?;
-            error!("request error {:?}", &err);
+            error!("request error {:?}", err);
             Err(DuneRequestError::from(err))
         }
     }
