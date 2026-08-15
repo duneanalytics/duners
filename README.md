@@ -91,26 +91,29 @@ Parameter names must match the names defined in the query on Dune.
 
 ## Deserializing result rows
 
-Define a struct whose fields match the query’s columns and derive `Deserialize`. You can use your own types; the API often returns numbers and dates as **strings**, so use the helpers in [`parse_utils`](https://docs.rs/duners/latest/duners/parse_utils/index.html) when needed:
+Define a struct whose fields match the query’s columns and derive `Deserialize`. You can use your own types; depending on the column type, the API returns numbers and dates either as JSON numbers or as **strings**, so use the helpers in [`parse_utils`](https://docs.rs/duners/latest/duners/parse_utils/index.html) to accept both:
 
 ```rust
 use chrono::{DateTime, Utc};
-use duners::parse_utils::{datetime_from_str, f64_from_str};
+use duners::parse_utils::{datetime_from_str, f64_from_str, optional_datetime_from_str, u64_from_str};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 struct ResultStruct {
     text_field: String,
     #[serde(deserialize_with = "f64_from_str")]
-    number_field: f64,
+    volume_usd: f64,
+    #[serde(deserialize_with = "u64_from_str")]
+    trade_count: u64,
     #[serde(deserialize_with = "datetime_from_str")]
-    date_field: DateTime<Utc>,
-    list_field: String,
+    block_time: DateTime<Utc>,
+    #[serde(default, deserialize_with = "optional_datetime_from_str")]
+    first_trade_at: Option<DateTime<Utc>>,
 }
 ```
 
-- **`f64_from_str`** — for numeric columns that come as strings.
-- **`datetime_from_str`** — for date/timestamp columns that come as strings.
+- **`f64_from_str`** / **`u64_from_str`** — for numeric columns, whether they arrive as JSON numbers or strings (Dune encodes e.g. decimals and bigints as strings).
+- **`datetime_from_str`** / **`optional_datetime_from_str`** — for date/timestamp columns; accepts RFC 3339 as well as Dune result formats like `2022-01-01 01:02:03[.000][ UTC]`.
 
 ## Lower-level API
 
