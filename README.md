@@ -22,7 +22,7 @@ You’ll need the **tokio** runtime (e.g. `tokio` with `rt-multi-thread` and `ma
    export DUNE_API_KEY="your-api-key"
    ```
 
-3. **Run a query** using the `refresh` helper (execute → wait until done → return results):
+3. **Run a saved query** using `run_query` (execute → wait until done → return all results):
 
 ```rust
 use duners::{DuneClient, DuneRequestError};
@@ -37,13 +37,21 @@ struct Row {
 #[tokio::main]
 async fn main() -> Result<(), DuneRequestError> {
     let client = DuneClient::from_env();
-    let result = client.refresh::<Row>(971694, None, None).await?;
+    let result = client.run_query::<Row>(971694, None, None).await?;
     println!("{:?}", result.get_rows());
     Ok(())
 }
 ```
 
 The **query ID** (e.g. `971694`) is the number at the end of a Dune query URL: `https://dune.com/queries/971694`.
+
+To execute repository-owned SQL without creating a saved query, use `run_sql`:
+
+```rust
+let result = client
+    .run_sql::<MyRow>("SELECT 1 AS value", None, None)
+    .await?;
+```
 
 ## Authentication
 
@@ -52,7 +60,7 @@ The **query ID** (e.g. `971694`) is the number at the end of a Dune query URL: `
 
 ## Parameterized queries
 
-For queries that take parameters, pass a list of [`Parameter`](https://docs.rs/duners/latest/duners/parameters/struct.Parameter.html) as the second argument to `refresh` (or `execute_query`):
+For saved queries that take parameters, pass a list of [`Parameter`](https://docs.rs/duners/latest/duners/parameters/struct.Parameter.html) as the second argument to `run_query` (or `execute_query`):
 
 ```rust
 use duners::{DuneClient, Parameter};
@@ -62,7 +70,7 @@ let params = vec![
     Parameter::number("MinAmount", "100"),
     Parameter::list("Token", "ETH"),
 ];
-let result = client.refresh::<MyRow>(QUERY_ID, Some(params), None).await?;
+let result = client.run_query::<MyRow>(QUERY_ID, Some(params), None).await?;
 ```
 
 Parameter names must match the names defined in the query on Dune.
