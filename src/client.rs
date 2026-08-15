@@ -715,8 +715,31 @@ fn merge_result_page<T>(
     if page.state != ExecutionStatus::Complete {
         return Err(pagination_error("result page is not complete"));
     }
+
+    let row_count = results
+        .result
+        .rows
+        .len()
+        .checked_add(page.result.rows.len())
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or_else(|| pagination_error("row count exceeds u32"))?;
+    let result_set_bytes = results
+        .result
+        .metadata
+        .result_set_bytes
+        .checked_add(page.result.metadata.result_set_bytes)
+        .ok_or_else(|| pagination_error("result set byte count exceeds u64"))?;
+    let datapoint_count = results
+        .result
+        .metadata
+        .datapoint_count
+        .checked_add(page.result.metadata.datapoint_count)
+        .ok_or_else(|| pagination_error("datapoint count exceeds u32"))?;
+
     results.result.rows.append(&mut page.result.rows);
-    results.result.metadata.row_count = u32::try_from(results.result.rows.len()).ok();
+    results.result.metadata.row_count = Some(row_count);
+    results.result.metadata.result_set_bytes = result_set_bytes;
+    results.result.metadata.datapoint_count = datapoint_count;
     Ok(())
 }
 
@@ -775,7 +798,7 @@ mod tests {
                     result_set_bytes: 1,
                     total_result_set_bytes: Some(2),
                     total_row_count,
-                    datapoint_count: total_row_count,
+                    datapoint_count: 1,
                     pending_time_millis: Some(0),
                     execution_time_millis: 1,
                 },
@@ -964,6 +987,8 @@ mod tests {
 
         assert_eq!(results.result.rows, vec![1, 2]);
         assert_eq!(results.result.metadata.row_count, Some(2));
+        assert_eq!(results.result.metadata.result_set_bytes, 2);
+        assert_eq!(results.result.metadata.datapoint_count, 2);
     }
 
     #[test]
