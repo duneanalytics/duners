@@ -12,6 +12,14 @@ use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use std::str::FromStr;
 
+#[derive(Deserialize)]
+pub(crate) struct PaginatedResultResponse<T> {
+    #[serde(flatten)]
+    pub(crate) response: GetResultResponse<T>,
+    #[serde(default)]
+    pub(crate) next_offset: Option<u64>,
+}
+
 /// Returned from [`DuneClient::execute_query`](crate::client::DuneClient::execute_query). Contains the execution ID to poll or fetch results.
 #[derive(Deserialize, Debug)]
 pub struct ExecutionResponse {

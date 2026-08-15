@@ -6,13 +6,13 @@ use crate::error::{DuneError, DuneRequestError};
 use crate::parameters::Parameter;
 use crate::response::{
     CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
-    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse, QueryBody,
-    QueryResponse, SuccessResponse, UploadCsvRequest,
+    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse,
+    PaginatedResultResponse, QueryBody, QueryResponse, SuccessResponse, UploadCsvRequest,
 };
 use dotenvy::dotenv;
 use log::{debug, error, info};
 use reqwest::{Error, Response};
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::HashMap;
 use std::env;
@@ -21,14 +21,6 @@ use tokio::time::{sleep, Duration};
 /// Base URL for the Dune API (v1).
 const BASE_URL: &str = "https://api.dune.com/api/v1";
 const DEFAULT_PING_FREQUENCY_SECONDS: u64 = 5;
-
-#[derive(Deserialize)]
-struct PaginatedResultResponse<T> {
-    #[serde(flatten)]
-    response: GetResultResponse<T>,
-    #[serde(default)]
-    next_offset: Option<u64>,
-}
 
 /// Client for the [Dune Analytics API](https://dune.com/docs/api/).
 ///
@@ -611,6 +603,27 @@ impl DuneClient {
     ///
     /// The `performance` parameter controls the execution tier. The
     /// `ping_frequency` controls the seconds between status requests and defaults to five.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Row {
+    ///     value: u64,
+    /// }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let result = client
+    ///     .run_sql::<Row>("SELECT 1 AS value", None, None)
+    ///     .await?;
+    /// assert_eq!(result.get_rows()[0].value, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn run_sql<T: DeserializeOwned>(
         &self,
         sql: &str,
