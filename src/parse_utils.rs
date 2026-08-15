@@ -26,7 +26,7 @@ fn date_string_parser(date_str: &str, format: &str) -> Result<DateTime<Utc>, Par
 /// assert_eq!(dt.format("%Y-%m-%d").to_string(), "2022-01-01");
 /// ```
 pub fn date_parse(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
-    date_string_parser(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+    date_string_parser(date_str, "%Y-%m-%dT%H:%M:%S%.fZ")
 }
 
 /// Parses timestamp strings returned in **query result** columns (Dune timestamp type).
@@ -34,9 +34,8 @@ pub fn date_parse(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
 /// Accepts `YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DD HH:MM:SS.ffffff`, with an optional ` UTC` suffix.
 pub fn dune_date(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
     let date_str = date_str.strip_suffix(" UTC").unwrap_or(date_str);
-    // Try with microseconds first
-    date_string_parser(date_str, "%Y-%m-%d %H:%M:%S.%f")
-        .or_else(|_| date_string_parser(date_str, "%Y-%m-%d %H:%M:%S"))
+    // `%.f` parses left-aligned fractional seconds (`.123` is 123ms, not 123ns) and is optional.
+    date_string_parser(date_str, "%Y-%m-%d %H:%M:%S%.f")
 }
 
 fn parse_datetime(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
@@ -169,7 +168,7 @@ mod tests {
         let date_str = "2022-01-01T01:02:03.123Z";
         assert_eq!(
             date_parse(date_str).unwrap().to_string(),
-            "2022-01-01 01:02:03.000000123 UTC"
+            "2022-01-01 01:02:03.123 UTC"
         )
     }
 
@@ -189,6 +188,24 @@ mod tests {
             dune_date(date_str).unwrap().to_string(),
             "2022-05-04 00:00:00 UTC"
         )
+    }
+
+    #[test]
+    fn dune_date_with_subseconds() {
+        for (date_str, expected) in [
+            ("2022-05-04 00:00:00.123", "2022-05-04 00:00:00.123 UTC"),
+            ("2022-05-04 00:00:00.123 UTC", "2022-05-04 00:00:00.123 UTC"),
+            (
+                "2022-05-04 00:00:00.123456 UTC",
+                "2022-05-04 00:00:00.123456 UTC",
+            ),
+        ] {
+            assert_eq!(
+                dune_date(date_str).unwrap().to_string(),
+                expected,
+                "failed for {date_str}"
+            );
+        }
     }
 
     #[test]
