@@ -972,8 +972,11 @@ mod tests {
     #[tokio::test]
     async fn invalid_query_id() {
         let dune = DuneClient::from_env();
-        let error = dune.execute_query(u32::MAX, None).await.unwrap_err();
-        assert!(matches!(error, DuneRequestError::Dune(_)))
+        let error = dune.execute_query(i32::MAX as u32, None).await.unwrap_err();
+        assert_eq!(
+            error,
+            DuneRequestError::Dune(String::from("Query not found"))
+        )
     }
 
     #[tokio::test]
