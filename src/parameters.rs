@@ -4,6 +4,21 @@
 //! when calling [`execute_query`](crate::client::DuneClient::execute_query) or [`refresh`](crate::client::DuneClient::refresh).
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
+
+/// Query engine performance tier for raw SQL executions.
+///
+/// Passed to [`execute_sql`](crate::client::DuneClient::execute_sql) and
+/// [`run_sql`](crate::client::DuneClient::run_sql). Pass `None` to use the
+/// default tier for the query engine; credits are consumed based on actual
+/// compute resources used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Performance {
+    Small,
+    Medium,
+    Large,
+}
 
 /// Dune supports four parameter types; all are sent to the API as JSON strings.
 #[derive(Debug, PartialEq)]
@@ -131,6 +146,22 @@ mod tests {
                 value: "2022-01-01 01:02:03".to_string(),
             }
         )
+    }
+
+    #[test]
+    fn performance_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&Performance::Small).unwrap(),
+            "\"small\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Performance::Medium).unwrap(),
+            "\"medium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Performance::Large).unwrap(),
+            "\"large\""
+        );
     }
 
     #[test]

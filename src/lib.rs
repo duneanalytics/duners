@@ -25,7 +25,7 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), DuneRequestError> {
 //!     let client = DuneClient::from_env();
-//!     let result = client.refresh::<Row>(971694, None, None).await?;
+//!     let result = client.run_query::<Row>(971694, None, None).await?;
 //!     println!("{:?}", result.get_rows());
 //!     Ok(())
 //! }
@@ -34,7 +34,8 @@
 //! ## What’s in this crate
 //!
 //! - **[`DuneClient`](client::DuneClient)** — Main entry point. Create with [`DuneClient::new`](client::DuneClient::new) or [`DuneClient::from_env`](client::DuneClient::from_env).
-//! - **[`refresh`](client::DuneClient::refresh)** — Run a query and wait for results (execute → poll status → return rows).
+//! - **[`run_query`](client::DuneClient::run_query)** — Execute a saved query, wait, and return all rows.
+//! - **[`run_sql`](client::DuneClient::run_sql)** — Execute raw SQL, wait, and return all rows.
 //! - **Lower-level API** — [`execute_query`](client::DuneClient::execute_query), [`get_status`](client::DuneClient::get_status), [`get_results`](client::DuneClient::get_results), [`cancel_execution`](client::DuneClient::cancel_execution) for full control.
 //! - **[`Parameter`](parameters::Parameter)** — Query parameters (text, number, date, list) for parameterized queries.
 //! - **[`parse_utils`](parse_utils)** — Helpers for deserializing Dune’s JSON (e.g. dates and numbers that come as strings): [`datetime_from_str`](parse_utils::datetime_from_str), [`f64_from_str`](parse_utils::f64_from_str).
@@ -51,7 +52,7 @@ pub mod response;
 // Re-export commonly used types for convenience and clearer docs.
 pub use client::DuneClient;
 pub use error::DuneRequestError;
-pub use parameters::Parameter;
+pub use parameters::{Parameter, Performance};
 pub use response::{
     ColumnDef, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionStatus,
     GetResultResponse, InsertTableResponse, QueryBody, QueryResponse, SuccessResponse,

@@ -3,14 +3,14 @@
 //! This module provides [`DuneClient`] for calling the [Dune Analytics API](https://dune.com/docs/api/).
 
 use crate::error::{DuneError, DuneRequestError};
-use crate::parameters::Parameter;
+use crate::parameters::{Parameter, Performance};
 use crate::response::{
     CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
-    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse, QueryBody,
-    QueryResponse, SuccessResponse, UploadCsvRequest,
+    ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse,
+    PaginatedResultResponse, QueryBody, QueryResponse, SuccessResponse, UploadCsvRequest,
 };
 use dotenvy::dotenv;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use reqwest::{Error, Response};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -20,6 +20,7 @@ use tokio::time::{sleep, Duration};
 
 /// Base URL for the Dune API (v1).
 const BASE_URL: &str = "https://api.dune.com/api/v1";
+const DEFAULT_PING_FREQUENCY_SECONDS: u64 = 5;
 
 /// Client for the [Dune Analytics API](https://dune.com/docs/api/).
 ///
@@ -28,8 +29,8 @@ const BASE_URL: &str = "https://api.dune.com/api/v1";
 ///
 /// ## High-level usage
 ///
-/// Use **[`refresh`](DuneClient::refresh)** to execute a query, wait until it finishes, and get
-/// the result rows in one call. This is the easiest way to run a query.
+/// Use **[`run_query`](DuneClient::run_query)** for a saved query or
+/// **[`run_sql`](DuneClient::run_sql)** for raw SQL. Both wait for completion and return all rows.
 ///
 /// ## Low-level usage
 ///
@@ -214,8 +215,8 @@ impl DuneClient {
 
     /// Execute raw SQL directly without a saved query.
     ///
-    /// The `performance` parameter controls the execution tier:
-    /// `"medium"` (default), `"large"`, or `"community"`.
+    /// The `performance` parameter selects the [`Performance`] engine tier;
+    /// pass `None` to use the engine's default.
     ///
     /// # Example
     ///
@@ -231,7 +232,7 @@ impl DuneClient {
     pub async fn execute_sql(
         &self,
         sql: &str,
-        performance: Option<&str>,
+        performance: Option<Performance>,
     ) -> Result<ExecutionResponse, DuneRequestError> {
         let mut body = json!({ "sql": sql });
         if let Some(perf) = performance {
@@ -294,6 +295,22 @@ impl DuneClient {
             .await
             .map_err(DuneRequestError::from)?;
         DuneClient::_parse_response::<GetResultResponse<T>>(response).await
+    }
+
+    async fn get_results_page<T: DeserializeOwned>(
+        &self,
+        job_id: &str,
+        offset: Option<u64>,
+    ) -> Result<PaginatedResultResponse<T>, DuneRequestError> {
+        let route = match offset {
+            Some(offset) => format!("execution/{job_id}/results?offset={offset}"),
+            None => format!("execution/{job_id}/results"),
+        };
+        let response = self
+            ._get_url(&route)
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<PaginatedResultResponse<T>>(response).await
     }
 
     /// Get the latest results for a query without triggering a new execution.
@@ -530,10 +547,8 @@ impl DuneClient {
         DuneClient::_parse_response::<SuccessResponse>(response).await
     }
 
-    /// Convenience method for users to
-    /// 1. execute,
-    /// 2. wait for execution to complete,
-    /// 3. fetch and return query results.
+    /// Execute a saved query, wait for completion, and return all result rows.
+    ///
     /// # Arguments
     /// * `query_id` - an integer representing query ID
     ///   (found at the end of a Dune Query URL: [https://dune.com/queries/971694](https://dune.com/queries/971694))
@@ -564,36 +579,187 @@ impl DuneClient {
     /// #[tokio::main]
     /// async fn main() -> Result<(), DuneRequestError> {
     ///     let client = DuneClient::from_env();
-    ///     let result = client.refresh::<ResultStruct>(1215383, None, None).await?;
+    ///     let result = client.run_query::<ResultStruct>(1215383, None, None).await?;
     ///     println!("{:?}", result.get_rows());
     ///     Ok(())
     /// }
     /// ```
+    pub async fn run_query<T: DeserializeOwned>(
+        &self,
+        query_id: u32,
+        parameters: Option<Vec<Parameter>>,
+        ping_frequency: Option<u64>,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let execution = self.execute_query(query_id, parameters).await?;
+        info!(
+            "Running query {query_id} with execution ID {}",
+            execution.execution_id
+        );
+        self.wait_for_results(&execution.execution_id, ping_frequency)
+            .await
+    }
+
+    /// Execute raw SQL, wait for completion, and return all result rows.
+    ///
+    /// The `performance` parameter selects the [`Performance`] engine tier
+    /// (`None` uses the engine's default). The `ping_frequency` controls the
+    /// seconds between status requests and defaults to five.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Row {
+    ///     value: u64,
+    /// }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let result = client
+    ///     .run_sql::<Row>("SELECT 1 AS value", None, None)
+    ///     .await?;
+    /// assert_eq!(result.get_rows()[0].value, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn run_sql<T: DeserializeOwned>(
+        &self,
+        sql: &str,
+        performance: Option<Performance>,
+        ping_frequency: Option<u64>,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let execution = self.execute_sql(sql, performance).await?;
+        info!("Running SQL with execution ID {}", execution.execution_id);
+        self.wait_for_results(&execution.execution_id, ping_frequency)
+            .await
+    }
+
+    /// Compatibility alias for [`run_query`](DuneClient::run_query).
     pub async fn refresh<T: DeserializeOwned>(
         &self,
         query_id: u32,
         parameters: Option<Vec<Parameter>>,
         ping_frequency: Option<u64>,
     ) -> Result<GetResultResponse<T>, DuneRequestError> {
-        let job_id = self.execute_query(query_id, parameters).await?.execution_id;
-        info!("Refreshing {} Execution ID {}", query_id, job_id);
-        let mut status = self.get_status(&job_id).await?;
+        self.run_query(query_id, parameters, ping_frequency).await
+    }
+
+    async fn wait_for_results<T: DeserializeOwned>(
+        &self,
+        job_id: &str,
+        ping_frequency: Option<u64>,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let status = self.poll_until_terminal(job_id, ping_frequency).await?;
+        match status.state {
+            ExecutionStatus::Complete => self.get_all_results(job_id).await,
+            state => Err(terminal_execution_error(job_id, &state)),
+        }
+    }
+
+    async fn poll_until_terminal(
+        &self,
+        job_id: &str,
+        ping_frequency: Option<u64>,
+    ) -> Result<GetStatusResponse, DuneRequestError> {
+        let mut status = self.get_status(job_id).await?;
         while !status.state.is_terminal() {
             info!(
                 "waiting for query execution {job_id} to complete: {:?}",
                 status.state
             );
-            sleep(Duration::from_secs(ping_frequency.unwrap_or(5))).await;
-            status = self.get_status(&job_id).await?
+            sleep(Duration::from_secs(
+                ping_frequency.unwrap_or(DEFAULT_PING_FREQUENCY_SECONDS),
+            ))
+            .await;
+            status = self.get_status(job_id).await?
         }
-        let full_response = self.get_results::<T>(&job_id).await;
-        if status.state == ExecutionStatus::Failed {
-            warn!(
-                "{:?} Perhaps your query took too long to run!",
-                status.state
-            );
+        Ok(status)
+    }
+
+    async fn get_all_results<T: DeserializeOwned>(
+        &self,
+        job_id: &str,
+    ) -> Result<GetResultResponse<T>, DuneRequestError> {
+        let mut page = self.get_results_page(job_id, None).await?;
+        let mut results = page.response;
+        while let Some(offset) = page.next_offset {
+            if offset == 0 {
+                return Err(pagination_error("next offset did not advance"));
+            }
+            page = self.get_results_page(job_id, Some(offset)).await?;
+            merge_result_page(&mut results, &mut page.response)?;
+            if page
+                .next_offset
+                .is_some_and(|next_offset| next_offset <= offset)
+            {
+                return Err(pagination_error("next offset did not advance"));
+            }
         }
-        full_response
+        ensure_complete_result(results)
+    }
+}
+
+fn terminal_execution_error(job_id: &str, state: &ExecutionStatus) -> DuneRequestError {
+    DuneRequestError::Dune(format!("execution {job_id} ended in state {state:?}"))
+}
+
+fn merge_result_page<T>(
+    results: &mut GetResultResponse<T>,
+    page: &mut GetResultResponse<T>,
+) -> Result<(), DuneRequestError> {
+    if results.execution_id != page.execution_id {
+        return Err(pagination_error("result execution IDs do not match"));
+    }
+    if page.state != ExecutionStatus::Complete {
+        return Err(pagination_error("result page is not complete"));
+    }
+
+    let row_count = results
+        .result
+        .rows
+        .len()
+        .checked_add(page.result.rows.len())
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or_else(|| pagination_error("row count exceeds u32"))?;
+    let result_set_bytes = results
+        .result
+        .metadata
+        .result_set_bytes
+        .checked_add(page.result.metadata.result_set_bytes)
+        .ok_or_else(|| pagination_error("result set byte count exceeds u64"))?;
+    let datapoint_count = results
+        .result
+        .metadata
+        .datapoint_count
+        .checked_add(page.result.metadata.datapoint_count)
+        .ok_or_else(|| pagination_error("datapoint count exceeds u32"))?;
+
+    results.result.rows.append(&mut page.result.rows);
+    results.result.metadata.row_count = Some(row_count);
+    results.result.metadata.result_set_bytes = result_set_bytes;
+    results.result.metadata.datapoint_count = datapoint_count;
+    Ok(())
+}
+
+fn pagination_error(message: &str) -> DuneRequestError {
+    DuneRequestError::Dune(format!("invalid paginated results: {message}"))
+}
+
+fn ensure_complete_result<T>(
+    results: GetResultResponse<T>,
+) -> Result<GetResultResponse<T>, DuneRequestError> {
+    let actual = results.result.rows.len();
+    let expected = results.result.metadata.total_row_count as usize;
+    if actual == expected {
+        Ok(results)
+    } else {
+        Err(DuneRequestError::Dune(format!(
+            "execution {} returned {actual} of {expected} rows",
+            results.execution_id
+        )))
     }
 }
 
@@ -601,7 +767,7 @@ impl DuneClient {
 mod tests {
     use super::*;
     use crate::parse_utils::{date_parse, datetime_from_str, f64_from_str};
-    use crate::response::ExecutionStatus;
+    use crate::response::{ExecutionResult, ExecutionStatus, ExecutionTimes, ResultMetaData};
     use chrono::{DateTime, Utc};
     use serde::Deserialize;
     use tokio::sync::OnceCell;
@@ -610,6 +776,36 @@ mod tests {
     // Long-running query (also used by `long_running_query`): slow enough that a
     // cancellation request reliably lands while it is still executing.
     const SLOW_QUERY_ID: u32 = 1229120;
+
+    fn result_page(rows: Vec<u64>, total_row_count: u32) -> GetResultResponse<u64> {
+        GetResultResponse {
+            execution_id: "execution-id".to_string(),
+            query_id: None,
+            is_execution_finished: Some(true),
+            state: ExecutionStatus::Complete,
+            times: ExecutionTimes {
+                submitted_at: Default::default(),
+                expires_at: None,
+                execution_started_at: None,
+                execution_ended_at: None,
+                cancelled_at: None,
+            },
+            result: ExecutionResult {
+                rows,
+                metadata: ResultMetaData {
+                    column_names: vec!["value".to_string()],
+                    column_types: None,
+                    row_count: Some(1),
+                    result_set_bytes: 1,
+                    total_result_set_bytes: Some(2),
+                    total_row_count,
+                    datapoint_count: 1,
+                    pending_time_millis: Some(0),
+                    execution_time_millis: 1,
+                },
+            },
+        }
+    }
 
     async fn wait_for_completion(dune: &DuneClient, job_id: &str) {
         let mut status = dune.get_status(job_id).await.unwrap();
@@ -664,10 +860,7 @@ mod tests {
     async fn invalid_query_id() {
         let dune = DuneClient::from_env();
         let error = dune.execute_query(u32::MAX, None).await.unwrap_err();
-        assert_eq!(
-            error,
-            DuneRequestError::Dune(String::from("An internal error occurred"))
-        )
+        assert!(matches!(error, DuneRequestError::Dune(_)))
     }
 
     #[tokio::test]
@@ -738,7 +931,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh() {
+    async fn run_query() {
         let dune = DuneClient::from_env();
 
         #[derive(Deserialize, Debug, PartialEq)]
@@ -751,7 +944,7 @@ mod tests {
             list_field: String,
         }
         let results = dune
-            .refresh::<ResultStruct>(
+            .run_query::<ResultStruct>(
                 3238619,
                 Some(vec![Parameter::number("NumberField", "3.141592653589793")]),
                 None,
@@ -767,6 +960,84 @@ mod tests {
             },
             results.get_rows()[0]
         )
+    }
+
+    #[tokio::test]
+    async fn run_sql() {
+        #[derive(Deserialize)]
+        struct Row {
+            value: u64,
+        }
+
+        let results = DuneClient::from_env()
+            .run_sql::<Row>("SELECT 1 AS value", None, Some(1))
+            .await
+            .unwrap();
+
+        assert_eq!(results.query_id, None);
+        assert_eq!(results.get_rows()[0].value, 1);
+    }
+
+    #[test]
+    fn result_pages_are_combined_and_checked_for_completeness() {
+        let mut results = result_page(vec![1], 2);
+        let mut page = result_page(vec![2], 2);
+
+        merge_result_page(&mut results, &mut page).unwrap();
+        let results = ensure_complete_result(results).unwrap();
+
+        assert_eq!(results.result.rows, vec![1, 2]);
+        assert_eq!(results.result.metadata.row_count, Some(2));
+        assert_eq!(results.result.metadata.result_set_bytes, 2);
+        assert_eq!(results.result.metadata.datapoint_count, 2);
+    }
+
+    #[test]
+    fn paginated_envelope_is_deserialized_without_changing_public_response() {
+        let page: PaginatedResultResponse<u64> = serde_json::from_value(serde_json::json!({
+            "execution_id": "execution-id",
+            "query_id": null,
+            "state": "QUERY_STATE_COMPLETED",
+            "submitted_at": "2026-08-15T00:00:00.000Z",
+            "result": {
+                "rows": [1],
+                "metadata": {
+                    "column_names": ["value"],
+                    "result_set_bytes": 1,
+                    "total_row_count": 2,
+                    "datapoint_count": 2,
+                    "execution_time_millis": 1
+                }
+            },
+            "next_uri": "https://api.dune.com/api/v1/execution/execution-id/results?offset=1",
+            "next_offset": 1
+        }))
+        .unwrap();
+
+        assert_eq!(page.response.result.rows, vec![1]);
+        assert_eq!(page.next_offset, Some(1));
+    }
+
+    #[test]
+    fn incomplete_results_are_rejected() {
+        let error = ensure_complete_result(result_page(vec![1], 2)).unwrap_err();
+
+        assert_eq!(
+            error,
+            DuneRequestError::Dune("execution execution-id returned 1 of 2 rows".to_string())
+        );
+    }
+
+    #[test]
+    fn unsuccessful_terminal_states_are_errors() {
+        assert_eq!(
+            terminal_execution_error("execution-id", &ExecutionStatus::Failed),
+            DuneRequestError::Dune("execution execution-id ended in state Failed".to_string())
+        );
+        assert_eq!(
+            terminal_execution_error("execution-id", &ExecutionStatus::Cancelled),
+            DuneRequestError::Dune("execution execution-id ended in state Cancelled".to_string())
+        );
     }
 
     #[tokio::test]

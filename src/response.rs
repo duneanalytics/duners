@@ -1,7 +1,9 @@
 //! Response types for Dune API methods.
 //!
 //! You will mostly use [`GetResultResponse<T>`] and its [`get_rows`](GetResultResponse::get_rows) method
-//! when calling [`refresh`](crate::client::DuneClient::refresh) or [`get_results`](crate::client::DuneClient::get_results).
+//! when calling [`run_query`](crate::client::DuneClient::run_query),
+//! [`run_sql`](crate::client::DuneClient::run_sql), or
+//! [`get_results`](crate::client::DuneClient::get_results).
 //! The generic `T` is your row type (a struct with `#[derive(Deserialize)]` matching the query columns).
 
 use crate::parse_utils::{datetime_from_str, optional_datetime_from_str};
@@ -9,6 +11,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::DeserializeFromStr;
 use std::str::FromStr;
+
+#[derive(Deserialize)]
+pub(crate) struct PaginatedResultResponse<T> {
+    #[serde(flatten)]
+    pub(crate) response: GetResultResponse<T>,
+    #[serde(default)]
+    pub(crate) next_offset: Option<u64>,
+}
 
 /// Returned from [`DuneClient::execute_query`](crate::client::DuneClient::execute_query). Contains the execution ID to poll or fetch results.
 #[derive(Deserialize, Debug)]
@@ -204,7 +214,7 @@ impl<T> GetResultResponse<T> {
     ///
     /// # async fn run() -> Result<(), DuneRequestError> {
     /// let client = DuneClient::from_env();
-    /// let response: GetResultResponse<Row> = client.refresh(971694, None, None).await?;
+    /// let response: GetResultResponse<Row> = client.run_query(971694, None, None).await?;
     /// let rows = response.get_rows();
     /// # Ok(()) }
     /// ```
