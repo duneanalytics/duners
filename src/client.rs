@@ -3,7 +3,7 @@
 //! This module provides [`DuneClient`] for calling the [Dune Analytics API](https://dune.com/docs/api/).
 
 use crate::error::{DuneError, DuneRequestError};
-use crate::parameters::Parameter;
+use crate::parameters::{Parameter, Performance};
 use crate::response::{
     CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
     ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse,
@@ -215,8 +215,8 @@ impl DuneClient {
 
     /// Execute raw SQL directly without a saved query.
     ///
-    /// The `performance` parameter controls the execution tier:
-    /// `"medium"` (default), `"large"`, or `"community"`.
+    /// The `performance` parameter selects the [`Performance`] engine tier;
+    /// pass `None` to use the engine's default.
     ///
     /// # Example
     ///
@@ -232,7 +232,7 @@ impl DuneClient {
     pub async fn execute_sql(
         &self,
         sql: &str,
-        performance: Option<&str>,
+        performance: Option<Performance>,
     ) -> Result<ExecutionResponse, DuneRequestError> {
         let mut body = json!({ "sql": sql });
         if let Some(perf) = performance {
@@ -601,8 +601,9 @@ impl DuneClient {
 
     /// Execute raw SQL, wait for completion, and return all result rows.
     ///
-    /// The `performance` parameter controls the execution tier. The
-    /// `ping_frequency` controls the seconds between status requests and defaults to five.
+    /// The `performance` parameter selects the [`Performance`] engine tier
+    /// (`None` uses the engine's default). The `ping_frequency` controls the
+    /// seconds between status requests and defaults to five.
     ///
     /// # Examples
     ///
@@ -627,7 +628,7 @@ impl DuneClient {
     pub async fn run_sql<T: DeserializeOwned>(
         &self,
         sql: &str,
-        performance: Option<&str>,
+        performance: Option<Performance>,
         ping_frequency: Option<u64>,
     ) -> Result<GetResultResponse<T>, DuneRequestError> {
         let execution = self.execute_sql(sql, performance).await?;

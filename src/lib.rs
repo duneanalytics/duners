@@ -52,7 +52,7 @@ pub mod response;
 // Re-export commonly used types for convenience and clearer docs.
 pub use client::DuneClient;
 pub use error::DuneRequestError;
-pub use parameters::Parameter;
+pub use parameters::{Parameter, Performance};
 pub use response::{
     ColumnDef, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionStatus,
     GetResultResponse, InsertTableResponse, QueryBody, QueryResponse, SuccessResponse,
