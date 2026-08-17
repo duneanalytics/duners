@@ -53,6 +53,20 @@ let result = client
     .await?;
 ```
 
+For large result sets, `stream_query` and `stream_sql` yield each result page as it is fetched instead of buffering everything in memory:
+
+```rust
+use futures_util::StreamExt;
+
+let pages = client
+    .stream_sql::<MyRow>("SELECT 1 AS value", None, None)
+    .await?;
+let mut pages = std::pin::pin!(pages);
+while let Some(page) = pages.next().await {
+    println!("{:?}", page?.get_rows());
+}
+```
+
 ## Authentication
 
 - **`DuneClient::new(api_key)`** — pass the API key directly.
