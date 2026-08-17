@@ -10,6 +10,7 @@ use crate::response::{
     PaginatedResultResponse, QueryBody, QueryResponse, SuccessResponse, UploadCsvRequest,
 };
 use dotenvy::dotenv;
+use futures_util::{stream::try_unfold, Stream};
 use log::{debug, error, info};
 use reqwest::{Error, Response};
 use serde::de::DeserializeOwned;
@@ -637,6 +638,118 @@ impl DuneClient {
             .await
     }
 
+    /// Execute a saved query, wait for completion, and stream result pages.
+    ///
+    /// A paged alternative to [`run_query`](DuneClient::run_query): each page is
+    /// yielded as it is fetched instead of buffering the full result set, so
+    /// large results can be processed without holding every row in memory.
+    pub async fn stream_query<'a, T: DeserializeOwned + 'a>(
+        &'a self,
+        query_id: u32,
+        parameters: Option<Vec<Parameter>>,
+        ping_frequency: Option<u64>,
+    ) -> Result<
+        impl Stream<Item = Result<GetResultResponse<T>, DuneRequestError>> + 'a,
+        DuneRequestError,
+    > {
+        let execution = self.execute_query(query_id, parameters).await?;
+        info!(
+            "Streaming query {query_id} with execution ID {}",
+            execution.execution_id
+        );
+        self.wait_then_stream(execution.execution_id, ping_frequency)
+            .await
+    }
+
+    /// Execute raw SQL, wait for completion, and stream result pages.
+    ///
+    /// A paged alternative to [`run_sql`](DuneClient::run_sql); see
+    /// [`stream_query`](DuneClient::stream_query) for when to prefer streaming.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use duners::{DuneClient, DuneRequestError};
+    /// use futures_util::StreamExt;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Row {
+    ///     value: u64,
+    /// }
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let pages = client
+    ///     .stream_sql::<Row>("SELECT 1 AS value", None, None)
+    ///     .await?;
+    /// let mut pages = std::pin::pin!(pages);
+    /// while let Some(page) = pages.next().await {
+    ///     println!("got {} rows", page?.get_rows().len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn stream_sql<'a, T: DeserializeOwned + 'a>(
+        &'a self,
+        sql: &str,
+        performance: Option<Performance>,
+        ping_frequency: Option<u64>,
+    ) -> Result<
+        impl Stream<Item = Result<GetResultResponse<T>, DuneRequestError>> + 'a,
+        DuneRequestError,
+    > {
+        let execution = self.execute_sql(sql, performance).await?;
+        info!("Streaming SQL with execution ID {}", execution.execution_id);
+        self.wait_then_stream(execution.execution_id, ping_frequency)
+            .await
+    }
+
+    /// Stream the result pages of a completed execution.
+    ///
+    /// The low-level building block behind [`stream_query`](DuneClient::stream_query)
+    /// and [`stream_sql`](DuneClient::stream_sql): walks the paginated results
+    /// endpoint via `next_offset` and yields one [`GetResultResponse`] per page.
+    /// Errors if the offset fails to advance between pages.
+    pub fn stream_results<'a, T: DeserializeOwned + 'a>(
+        &'a self,
+        job_id: &str,
+    ) -> impl Stream<Item = Result<GetResultResponse<T>, DuneRequestError>> + 'a {
+        let job_id = job_id.to_string();
+        try_unfold(
+            (job_id, Some(None)),
+            move |(job_id, cursor): (String, Option<Option<u64>>)| async move {
+                let Some(offset) = cursor else {
+                    return Ok(None);
+                };
+                let page = self.get_results_page(&job_id, offset).await?;
+                let next = match page.next_offset {
+                    None => None,
+                    Some(next_offset) if next_offset <= offset.unwrap_or(0) => {
+                        return Err(pagination_error("next offset did not advance"));
+                    }
+                    Some(next_offset) => Some(Some(next_offset)),
+                };
+                Ok(Some((page.response, (job_id, next))))
+            },
+        )
+    }
+
+    async fn wait_then_stream<'a, T: DeserializeOwned + 'a>(
+        &'a self,
+        job_id: String,
+        ping_frequency: Option<u64>,
+    ) -> Result<
+        impl Stream<Item = Result<GetResultResponse<T>, DuneRequestError>> + 'a,
+        DuneRequestError,
+    > {
+        let status = self.poll_until_terminal(&job_id, ping_frequency).await?;
+        match status.state {
+            ExecutionStatus::Complete => Ok(self.stream_results(&job_id)),
+            state => Err(terminal_execution_error(&job_id, &state)),
+        }
+    }
+
     /// Compatibility alias for [`run_query`](DuneClient::run_query).
     pub async fn refresh<T: DeserializeOwned>(
         &self,
@@ -976,6 +1089,27 @@ mod tests {
 
         assert_eq!(results.query_id, None);
         assert_eq!(results.get_rows()[0].value, 1);
+    }
+
+    #[tokio::test]
+    async fn stream_sql() {
+        use futures_util::StreamExt;
+
+        #[derive(Deserialize)]
+        struct Row {
+            value: u64,
+        }
+
+        let dune = DuneClient::from_env();
+        let pages = dune
+            .stream_sql::<Row>("SELECT 1 AS value", None, Some(1))
+            .await
+            .unwrap();
+        let mut pages = std::pin::pin!(pages);
+
+        let page = pages.next().await.unwrap().unwrap();
+        assert_eq!(page.get_rows()[0].value, 1);
+        assert!(pages.next().await.is_none());
     }
 
     #[test]

@@ -36,6 +36,7 @@
 //! - **[`DuneClient`](client::DuneClient)** — Main entry point. Create with [`DuneClient::new`](client::DuneClient::new) or [`DuneClient::from_env`](client::DuneClient::from_env).
 //! - **[`run_query`](client::DuneClient::run_query)** — Execute a saved query, wait, and return all rows.
 //! - **[`run_sql`](client::DuneClient::run_sql)** — Execute raw SQL, wait, and return all rows.
+//! - **[`stream_query`](client::DuneClient::stream_query) / [`stream_sql`](client::DuneClient::stream_sql)** — Paged variants that yield each result page as it is fetched, for large result sets.
 //! - **Lower-level API** — [`execute_query`](client::DuneClient::execute_query), [`get_status`](client::DuneClient::get_status), [`get_results`](client::DuneClient::get_results), [`cancel_execution`](client::DuneClient::cancel_execution) for full control.
 //! - **[`Parameter`](parameters::Parameter)** — Query parameters (text, number, date, list) for parameterized queries.
 //! - **[`parse_utils`](parse_utils)** — Helpers for deserializing Dune’s JSON (e.g. dates and numbers that come as strings): [`datetime_from_str`](parse_utils::datetime_from_str), [`f64_from_str`](parse_utils::f64_from_str).
