@@ -699,6 +699,16 @@ mod tests {
 /// The kind of change a contract decoding submission describes.
 ///
 /// Upgrades, renames, deletions and "other" requests are always routed to manual review.
+///
+/// # Example
+///
+/// ```
+/// use duners::ContractSubmissionType;
+///
+/// let kind: ContractSubmissionType = serde_json::from_str("\"upgrade\"").unwrap();
+/// assert_eq!(kind, ContractSubmissionType::Upgrade);
+/// assert_eq!(serde_json::to_string(&ContractSubmissionType::New).unwrap(), "\"new\"");
+/// ```
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContractSubmissionType {
@@ -715,6 +725,15 @@ pub enum ContractSubmissionType {
 }
 
 /// Lifecycle status of a contract decoding submission.
+///
+/// # Example
+///
+/// ```
+/// use duners::ContractSubmissionStatus;
+///
+/// let status: ContractSubmissionStatus = serde_json::from_str("\"needs_manual_review\"").unwrap();
+/// assert_eq!(status, ContractSubmissionStatus::NeedsManualReview);
+/// ```
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContractSubmissionStatus {
@@ -738,6 +757,26 @@ pub enum ContractSubmissionStatus {
 ///
 /// Mirrors the form at <https://dune.com/contracts/new>. Build with `..Default::default()` for the
 /// optional fields.
+///
+/// # Example
+///
+/// ```
+/// use duners::{ContractSubmissionInput, ContractSubmissionType};
+///
+/// let input = ContractSubmissionInput {
+///     blockchain_name: "ethereum".into(),
+///     address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984".into(),
+///     project_name: "uniswap".into(),
+///     contract_name: "UniswapToken".into(),
+///     abi: serde_json::json!([{"type": "event", "name": "Transfer", "inputs": []}]),
+///     submission_type: Some(ContractSubmissionType::Upgrade),
+///     resubmission_reason: Some("new implementation".into()),
+///     ..Default::default()
+/// };
+/// let json = serde_json::to_value(&input).unwrap();
+/// assert_eq!(json["submission_type"], "upgrade");
+/// assert!(json.get("idempotency_key").is_none()); // unset optionals are omitted
+/// ```
 #[derive(Serialize, Debug, Clone, Default)]
 pub struct ContractSubmissionInput {
     /// Chain the contract is deployed on, e.g. `ethereum`, `base`.
@@ -802,6 +841,19 @@ pub struct ContractSubmissionResult {
 }
 
 /// Response from [`submit_contracts`](crate::client::DuneClient::submit_contracts).
+///
+/// # Example
+///
+/// ```
+/// use duners::SubmitContractsResponse;
+///
+/// let resp: SubmitContractsResponse = serde_json::from_str(
+///     r#"{"results":[{"index":0,"submission_id":"sub_1","status":"pending"},
+///                    {"index":1,"error":"abi must be valid JSON"}]}"#,
+/// ).unwrap();
+/// assert_eq!(resp.results[0].submission_id.as_deref(), Some("sub_1"));
+/// assert_eq!(resp.results[1].error.as_deref(), Some("abi must be valid JSON"));
+/// ```
 #[derive(Deserialize, Debug)]
 pub struct SubmitContractsResponse {
     /// One result per submitted item, in request order.
@@ -811,6 +863,20 @@ pub struct SubmitContractsResponse {
 /// Filters and paging for [`list_contract_submissions`](crate::client::DuneClient::list_contract_submissions).
 ///
 /// All fields are optional; build with `..Default::default()`.
+///
+/// # Example
+///
+/// ```
+/// use duners::{ContractSubmissionStatus, ListContractSubmissionsRequest};
+///
+/// let request = ListContractSubmissionsRequest {
+///     blockchain_name: Some("ethereum".into()),
+///     status: Some(ContractSubmissionStatus::Pending),
+///     limit: Some(20),
+///     ..Default::default()
+/// };
+/// assert_eq!(serde_json::to_value(&request).unwrap()["status"], "pending");
+/// ```
 #[derive(Serialize, Debug, Clone, Default)]
 pub struct ListContractSubmissionsRequest {
     /// Maximum number of submissions to return (default 50, max 250).
@@ -869,6 +935,18 @@ pub struct ContractSubmission {
 }
 
 /// Response from [`list_contract_submissions`](crate::client::DuneClient::list_contract_submissions).
+///
+/// # Example
+///
+/// ```
+/// use duners::ListContractSubmissionsResponse;
+///
+/// let page: ListContractSubmissionsResponse = serde_json::from_str(
+///     r#"{"submissions":[],"total":0}"#,
+/// ).unwrap();
+/// assert_eq!(page.total, 0);
+/// assert!(page.next_cursor.is_none()); // last page
+/// ```
 #[derive(Deserialize, Debug)]
 pub struct ListContractSubmissionsResponse {
     /// Submissions on this page, newest first.
