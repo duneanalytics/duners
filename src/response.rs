@@ -452,6 +452,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn contract_submission_input_omits_unset_optionals_and_keeps_abi_shape() {
+        let input = ContractSubmissionInput {
+            blockchain_name: "ethereum".into(),
+            address: "0x1".into(),
+            project_name: "p".into(),
+            contract_name: "c".into(),
+            abi: serde_json::json!([{"type": "event"}]),
+            is_proxy: true,
+            idempotency_key: Some("k/0".into()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(SubmitContractsRequest {
+            submissions: vec![input],
+        })
+        .unwrap();
+        let item = &value["submissions"][0];
+        assert_eq!(item["abi"], serde_json::json!([{"type": "event"}]));
+        assert_eq!(item["is_proxy"], true);
+        assert_eq!(item["has_multiple_instances"], false);
+        assert_eq!(item["idempotency_key"], "k/0");
+        assert!(item.get("submission_type").is_none());
+        assert!(item.get("resubmission_reason").is_none());
+
+        let delete = ContractSubmissionInput {
+            abi: serde_json::Value::String("[]".into()),
+            submission_type: Some(ContractSubmissionType::Delete),
+            resubmission_reason: Some("redeployed".into()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&delete).unwrap();
+        assert_eq!(value["abi"], "[]");
+        assert_eq!(value["submission_type"], "delete");
+    }
+
+    #[test]
+    fn parses_submit_and_list_responses() {
+        let submit: SubmitContractsResponse = serde_json::from_str(
+            r#"{"results":[
+                {"index":0,"submission_id":"sub_1","status":"pending"},
+                {"index":1,"submission_id":"sub_0","status":"pending","replayed":true},
+                {"index":2,"error":"abi must be valid JSON"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(submit.results.len(), 3);
+        assert_eq!(submit.results[0].submission_id.as_deref(), Some("sub_1"));
+        assert!(!submit.results[0].replayed);
+        assert!(submit.results[1].replayed);
+        assert_eq!(
+            submit.results[2].error.as_deref(),
+            Some("abi must be valid JSON")
+        );
+        assert!(submit.results[2].submission_id.is_none());
+
+        let list: ListContractSubmissionsResponse = serde_json::from_str(
+            r#"{"submissions":[{
+                "id":"sub_1","blockchain_name":"ethereum","address":"0x1",
+                "project_name":"p","contract_name":"c","status":"needs_manual_review",
+                "submission_type":"upgrade","comment":"protected namespace",
+                "created_at":"2026-09-10T11:04:18.724658Z","updated_at":"2026-09-10T11:05:18Z",
+                "idempotency_key":"k/1"
+            }],"total":7,"next_cursor":"abc"}"#,
+        )
+        .unwrap();
+        assert_eq!(list.total, 7);
+        assert_eq!(list.next_cursor.as_deref(), Some("abc"));
+        let s = &list.submissions[0];
+        assert_eq!(s.status, ContractSubmissionStatus::NeedsManualReview);
+        assert_eq!(s.submission_type, ContractSubmissionType::Upgrade);
+        assert_eq!(s.comment.as_deref(), Some("protected namespace"));
+        assert_eq!(s.created_at.timestamp(), 1789038258);
+    }
+
+    #[test]
     fn status_from_str() {
         assert_eq!(
             ExecutionStatus::from_str("invalid"),
@@ -620,4 +694,188 @@ mod tests {
             }",
         );
     }
+}
+
+/// The kind of change a contract decoding submission describes.
+///
+/// Upgrades, renames, deletions and "other" requests are always routed to manual review.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractSubmissionType {
+    /// Decode a contract that is not yet decoded under this project and name.
+    New,
+    /// Replace the ABI of an already decoded contract.
+    Upgrade,
+    /// Move a decoded contract to a new project and/or contract name.
+    Rename,
+    /// Remove a decoded contract.
+    Delete,
+    /// A free-form request explained in `resubmission_reason`.
+    Other,
+}
+
+/// Lifecycle status of a contract decoding submission.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractSubmissionStatus {
+    /// Queued; the decoding pipeline picks it up within about a minute.
+    Pending,
+    /// Validated and about to be decoded.
+    Approved,
+    /// Not accepted; see `comment`.
+    Rejected,
+    /// Decoded tables are available.
+    Processed,
+    /// Being handled manually.
+    InProgress,
+    /// Withdrawn during manual handling.
+    Cancelled,
+    /// Waiting for a Dune team member.
+    NeedsManualReview,
+}
+
+/// One contract to submit for decoding with [`submit_contracts`](crate::client::DuneClient::submit_contracts).
+///
+/// Mirrors the form at <https://dune.com/contracts/new>. Build with `..Default::default()` for the
+/// optional fields.
+#[derive(Serialize, Debug, Clone, Default)]
+pub struct ContractSubmissionInput {
+    /// Chain the contract is deployed on, e.g. `ethereum`, `base`.
+    pub blockchain_name: String,
+    /// Contract address (hex for EVM chains).
+    pub address: String,
+    /// Project (namespace) the decoded tables are grouped under.
+    pub project_name: String,
+    /// Contract name used in the decoded table names.
+    pub contract_name: String,
+    /// The ABI, either as its JSON array of fragments or as a JSON string containing it.
+    pub abi: serde_json::Value,
+    /// The contract is a dynamic contract with several instances sharing one ABI.
+    pub has_multiple_instances: bool,
+    /// The instances are created by a factory contract.
+    pub is_created_by_factory: bool,
+    /// The ABI was written or edited by hand rather than fetched from an explorer.
+    pub is_manual_abi: bool,
+    /// The address is a proxy; the ABI belongs to its implementation.
+    pub is_proxy: bool,
+    /// Defaults to [`ContractSubmissionType::New`] when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submission_type: Option<ContractSubmissionType>,
+    /// Why the contract is being resubmitted. Required for `Delete` and `Other`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resubmission_reason: Option<String>,
+    /// Current project name; required for `Rename`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_project_name: Option<String>,
+    /// Current contract name; required for `Rename`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_contract_name: Option<String>,
+    /// Client-chosen key, unique per account, that makes the item safe to retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+/// Request body for [`submit_contracts`](crate::client::DuneClient::submit_contracts).
+#[derive(Serialize, Debug, Clone)]
+pub struct SubmitContractsRequest {
+    /// Between 1 and 100 contracts to submit.
+    pub submissions: Vec<ContractSubmissionInput>,
+}
+
+/// Per-item outcome of a submission batch, matched to the request by `index`.
+#[derive(Deserialize, Debug, Clone)]
+pub struct ContractSubmissionResult {
+    /// Position of the corresponding item in the request.
+    pub index: u32,
+    /// Id of the submission; set on success.
+    #[serde(default)]
+    pub submission_id: Option<String>,
+    /// `pending` on success.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// True when the idempotency key matched an earlier submission and nothing new was created.
+    #[serde(default)]
+    pub replayed: bool,
+    /// Why the item was rejected; set on failure.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Response from [`submit_contracts`](crate::client::DuneClient::submit_contracts).
+#[derive(Deserialize, Debug)]
+pub struct SubmitContractsResponse {
+    /// One result per submitted item, in request order.
+    pub results: Vec<ContractSubmissionResult>,
+}
+
+/// Filters and paging for [`list_contract_submissions`](crate::client::DuneClient::list_contract_submissions).
+///
+/// All fields are optional; build with `..Default::default()`.
+#[derive(Serialize, Debug, Clone, Default)]
+pub struct ListContractSubmissionsRequest {
+    /// Maximum number of submissions to return (default 50, max 250).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// `next_cursor` from a previous response, to fetch the next page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Filter by blockchain, e.g. `ethereum`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blockchain_name: Option<String>,
+    /// Filter by contract address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Filter by project (namespace) name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    /// Filter by contract name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_name: Option<String>,
+    /// Filter by status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ContractSubmissionStatus>,
+}
+
+/// A contract decoding submission as returned by
+/// [`list_contract_submissions`](crate::client::DuneClient::list_contract_submissions).
+#[derive(Deserialize, Debug, Clone)]
+pub struct ContractSubmission {
+    /// Submission id.
+    pub id: String,
+    /// Chain the contract is deployed on.
+    pub blockchain_name: String,
+    /// Contract address.
+    pub address: String,
+    /// Project (namespace) name.
+    pub project_name: String,
+    /// Contract name.
+    pub contract_name: String,
+    /// Current status.
+    pub status: ContractSubmissionStatus,
+    /// The kind of change requested.
+    pub submission_type: ContractSubmissionType,
+    /// Reviewer or system comment explaining the current status.
+    #[serde(default)]
+    pub comment: Option<String>,
+    /// When the submission was created.
+    #[serde(deserialize_with = "datetime_from_str")]
+    pub created_at: DateTime<Utc>,
+    /// When the submission last changed.
+    #[serde(deserialize_with = "datetime_from_str")]
+    pub updated_at: DateTime<Utc>,
+    /// The idempotency key it was submitted with, if any.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+/// Response from [`list_contract_submissions`](crate::client::DuneClient::list_contract_submissions).
+#[derive(Deserialize, Debug)]
+pub struct ListContractSubmissionsResponse {
+    /// Submissions on this page, newest first.
+    pub submissions: Vec<ContractSubmission>,
+    /// Total number of submissions matching the filters across all pages.
+    pub total: u32,
+    /// Present when more results exist; pass it back as `cursor`.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }

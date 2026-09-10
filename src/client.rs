@@ -7,7 +7,9 @@ use crate::parameters::{Parameter, Performance};
 use crate::response::{
     CancellationResponse, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionResponse,
     ExecutionStatus, GetResultResponse, GetStatusResponse, InsertTableResponse,
-    PaginatedResultResponse, QueryBody, QueryResponse, SuccessResponse, UploadCsvRequest,
+    ListContractSubmissionsRequest, ListContractSubmissionsResponse, PaginatedResultResponse,
+    QueryBody, QueryResponse, SubmitContractsRequest, SubmitContractsResponse, SuccessResponse,
+    UploadCsvRequest,
 };
 use dotenvy::dotenv;
 use futures_util::{stream::try_unfold, Stream};
@@ -117,6 +119,23 @@ impl DuneClient {
         let client = reqwest::Client::new();
         client
             .get(&request_url)
+            .header("x-dune-api-key", &self.api_key)
+            .send()
+            .await
+    }
+
+    /// Internal GET request handler with URL-encoded query parameters
+    async fn _get_with_query(
+        &self,
+        route: &str,
+        query: &[(String, String)],
+    ) -> Result<Response, Error> {
+        let request_url = reqwest::Url::parse_with_params(&format!("{BASE_URL}/{route}"), query)
+            .expect("BASE_URL and routes are valid URLs");
+        debug!("GET from {}", request_url);
+        let client = reqwest::Client::new();
+        client
+            .get(request_url)
             .header("x-dune-api-key", &self.api_key)
             .send()
             .await
@@ -548,6 +567,80 @@ impl DuneClient {
         DuneClient::_parse_response::<SuccessResponse>(response).await
     }
 
+    /// Submit up to 100 contracts for decoding in one request.
+    ///
+    /// Each item is validated and queued independently; the response carries one result per
+    /// item, matched by index, so one bad ABI does not fail the batch. Submissions are attributed
+    /// to the user who created the API key. Multi-chain batches and resubmissions require a paid
+    /// plan. See <https://docs.dune.com/api-reference/contracts/endpoint/decode>.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{ContractSubmissionInput, DuneClient, DuneRequestError, SubmitContractsRequest};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let resp = client.submit_contracts(SubmitContractsRequest {
+    ///     submissions: vec![ContractSubmissionInput {
+    ///         blockchain_name: "ethereum".into(),
+    ///         address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984".into(),
+    ///         project_name: "uniswap".into(),
+    ///         contract_name: "UniswapToken".into(),
+    ///         abi: serde_json::json!([{"type": "event", "name": "Transfer", "inputs": []}]),
+    ///         idempotency_key: Some("uniswap-token/ethereum/1".into()),
+    ///         ..Default::default()
+    ///     }],
+    /// }).await?;
+    /// for result in resp.results {
+    ///     println!("{} -> {:?} {:?}", result.index, result.submission_id, result.error);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn submit_contracts(
+        &self,
+        request: SubmitContractsRequest,
+    ) -> Result<SubmitContractsResponse, DuneRequestError> {
+        let response = self
+            ._post_json("contracts/decode", serde_json::to_value(&request).unwrap())
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<SubmitContractsResponse>(response).await
+    }
+
+    /// List the contract decoding submissions made by the user who created the API key,
+    /// newest first.
+    ///
+    /// Pass `next_cursor` from a response back as `cursor` to fetch the next page.
+    /// See <https://docs.dune.com/api-reference/contracts/endpoint/list>.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use duners::{ContractSubmissionStatus, DuneClient, DuneRequestError, ListContractSubmissionsRequest};
+    ///
+    /// # async fn run() -> Result<(), DuneRequestError> {
+    /// let client = DuneClient::from_env();
+    /// let page = client.list_contract_submissions(ListContractSubmissionsRequest {
+    ///     status: Some(ContractSubmissionStatus::Pending),
+    ///     limit: Some(20),
+    ///     ..Default::default()
+    /// }).await?;
+    /// println!("{} of {} pending", page.submissions.len(), page.total);
+    /// # Ok(()) }
+    /// ```
+    pub async fn list_contract_submissions(
+        &self,
+        request: ListContractSubmissionsRequest,
+    ) -> Result<ListContractSubmissionsResponse, DuneRequestError> {
+        let query = query_params(&request);
+        let response = self
+            ._get_with_query("contracts/submissions", &query)
+            .await
+            .map_err(DuneRequestError::from)?;
+        DuneClient::_parse_response::<ListContractSubmissionsResponse>(response).await
+    }
+
     /// Execute a saved query, wait for completion, and return all result rows.
     ///
     /// # Arguments
@@ -874,6 +967,23 @@ fn ensure_complete_result<T>(
             results.execution_id
         )))
     }
+}
+
+/// Flattens a serializable request into query parameters, skipping unset fields.
+fn query_params<T: serde::Serialize>(request: &T) -> Vec<(String, String)> {
+    let serde_json::Value::Object(fields) = serde_json::to_value(request).unwrap() else {
+        return Vec::new();
+    };
+    fields
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            (key, value)
+        })
+        .collect()
 }
 
 #[cfg(test)]

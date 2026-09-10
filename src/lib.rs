@@ -38,6 +38,7 @@
 //! - **[`run_sql`](client::DuneClient::run_sql)** — Execute raw SQL, wait, and return all rows.
 //! - **[`stream_query`](client::DuneClient::stream_query) / [`stream_sql`](client::DuneClient::stream_sql)** — Paged variants that yield each result page as it is fetched, for large result sets.
 //! - **Lower-level API** — [`execute_query`](client::DuneClient::execute_query), [`get_status`](client::DuneClient::get_status), [`get_results`](client::DuneClient::get_results), [`cancel_execution`](client::DuneClient::cancel_execution) for full control.
+//! - **Contract decoding** — [`submit_contracts`](client::DuneClient::submit_contracts) and [`list_contract_submissions`](client::DuneClient::list_contract_submissions) to submit contracts for decoding in batches and track their status.
 //! - **[`Parameter`](parameters::Parameter)** — Query parameters (text, number, date, list) for parameterized queries.
 //! - **[`parse_utils`](parse_utils)** — Helpers for deserializing Dune’s JSON (dates and numbers that arrive as JSON numbers or strings): [`datetime_from_str`](parse_utils::datetime_from_str), [`f64_from_str`](parse_utils::f64_from_str), [`u64_from_str`](parse_utils::u64_from_str).
 //! - **[`DuneRequestError`](error::DuneRequestError)** — All request and parsing errors.
@@ -55,7 +56,9 @@ pub use client::DuneClient;
 pub use error::DuneRequestError;
 pub use parameters::{Parameter, Performance};
 pub use response::{
-    ColumnDef, CreateTableRequest, CreateTableResponse, DuneQuery, ExecutionStatus,
-    GetResultResponse, InsertTableResponse, QueryBody, QueryResponse, SuccessResponse,
-    UploadCsvRequest,
+    ColumnDef, ContractSubmission, ContractSubmissionInput, ContractSubmissionResult,
+    ContractSubmissionStatus, ContractSubmissionType, CreateTableRequest, CreateTableResponse,
+    DuneQuery, ExecutionStatus, GetResultResponse, InsertTableResponse,
+    ListContractSubmissionsRequest, ListContractSubmissionsResponse, QueryBody, QueryResponse,
+    SubmitContractsRequest, SubmitContractsResponse, SuccessResponse, UploadCsvRequest,
 };
