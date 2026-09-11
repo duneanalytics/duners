@@ -126,6 +126,38 @@ For more control (e.g. custom polling or cancellation):
 
 See the [API docs](https://docs.rs/duners) for details and types.
 
+## Contract decoding
+
+Submit contracts for decoding in batches and track their status. Submissions are attributed to the user who created the API key; see the [docs](https://docs.dune.com/api-reference/contracts/introduction) for plan requirements.
+
+```rust,no_run
+use duners::{ContractSubmissionInput, DuneClient, ListContractSubmissionsRequest, SubmitContractsRequest};
+
+# async fn run() -> Result<(), duners::DuneRequestError> {
+let client = DuneClient::from_env();
+let resp = client.submit_contracts(SubmitContractsRequest {
+    submissions: vec![ContractSubmissionInput {
+        blockchain_name: "ethereum".into(),
+        address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984".into(),
+        project_name: "uniswap".into(),
+        contract_name: "UniswapToken".into(),
+        abi: serde_json::json!([{"type": "event", "name": "Transfer", "inputs": []}]),
+        idempotency_key: Some("uniswap-token/ethereum/1".into()), // optional, makes retries safe
+        ..Default::default()
+    }],
+}).await?;
+// One result per submission, matched by index: submission_id + status "pending", or error.
+println!("{:?}", resp.results);
+
+let page = client.list_contract_submissions(ListContractSubmissionsRequest {
+    limit: Some(20),
+    ..Default::default()
+}).await?;
+// Pass page.next_cursor back as `cursor` to fetch the next page.
+println!("{} of {}", page.submissions.len(), page.total);
+# Ok(()) }
+```
+
 ## Error handling
 
 All fallible methods return `Result<_, DuneRequestError>`. Use `?` to propagate. `DuneRequestError` implements `std::error::Error` and `Display`; variants are:
