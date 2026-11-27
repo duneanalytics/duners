@@ -8,10 +8,14 @@ A Rust client for the [Dune Analytics API](https://dune.com/docs/api/). Execute 
 ## Installation
 
 ```bash
+cargo new dune-example
+cd dune-example
 cargo add duners
+cargo add serde --features derive
+cargo add tokio --features macros,rt-multi-thread
 ```
 
-You’ll need the **tokio** runtime (e.g. `tokio` with `rt-multi-thread` and `macros`).
+The example below uses `serde` to deserialize rows and `tokio` to run async code. Add both as direct dependencies, even though `duners` also depends on them.
 
 ## Quick start
 
@@ -22,49 +26,69 @@ You’ll need the **tokio** runtime (e.g. `tokio` with `rt-multi-thread` and `ma
    export DUNE_API_KEY="your-api-key"
    ```
 
-3. **Run a saved query** using `run_query` (execute → wait until done → return all results):
+3. **Run a query** by putting this in `src/main.rs` and running `cargo run`:
 
 ```rust
 use duners::{DuneClient, DuneRequestError};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-struct Row {
-    symbol: String,
-    max_price: f64,
+struct ValueRow {
+    value: u64,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), DuneRequestError> {
     let client = DuneClient::from_env();
-    let result = client.run_query::<Row>(971694, None, None).await?;
+    let result = client.run_sql::<ValueRow>("SELECT 1 AS value", None, None).await?;
     println!("{:?}", result.get_rows());
     Ok(())
 }
 ```
 
-The **query ID** (e.g. `971694`) is the number at the end of a Dune query URL: `https://dune.com/queries/971694`.
+`run_sql` submits SQL, waits for completion, and returns all result rows. The rest of the examples assume an async function and a `client` created as above. Executing a query consumes credits.
 
-To execute repository-owned SQL without creating a saved query, use `run_sql`:
+To run a **saved query**, use its ID (the number at the end of a Dune query URL). For example, [query 971694](https://dune.com/queries/971694) returns `symbol` and `max_price`:
 
 ```rust
-let result = client
-    .run_sql::<MyRow>("SELECT 1 AS value", None, None)
-    .await?;
+#[derive(Deserialize, Debug)]
+struct PriceRow {
+    symbol: String,
+    max_price: f64,
+}
+
+let result = client.run_query::<PriceRow>(971694, None, None).await?;
+println!("{:?}", result.get_rows());
 ```
 
 For large result sets, `stream_query` and `stream_sql` yield each result page as it is fetched instead of buffering everything in memory:
+
+```bash
+cargo add futures-util
+```
 
 ```rust
 use futures_util::StreamExt;
 
 let pages = client
-    .stream_sql::<MyRow>("SELECT 1 AS value", None, None)
+    .stream_sql::<ValueRow>("SELECT 1 AS value", None, None)
     .await?;
 let mut pages = std::pin::pin!(pages);
 while let Some(page) = pages.next().await {
     println!("{:?}", page?.get_rows());
 }
+```
+
+## Reuse the latest results
+
+If a saved query has already run, fetch its latest result without starting another execution. This reads one API result page; use `run_query` or `stream_query` when you need every page from a new execution. Reading result rows can still consume credits.
+
+```rust
+let result = client.get_latest_results::<PriceRow>(971694).await?;
+println!("{:?}", result.get_rows());
+
+let csv = client.get_latest_results_csv(971694).await?;
+println!("{csv}");
 ```
 
 ## Authentication
@@ -74,24 +98,87 @@ while let Some(page) = pages.next().await {
 
 ## Parameterized queries
 
-For saved queries that take parameters, pass a list of [`Parameter`](https://docs.rs/duners/latest/duners/parameters/struct.Parameter.html) as the second argument to `run_query` (or `execute_query`):
+For saved queries that take parameters, pass a list of [`Parameter`](https://docs.rs/duners/latest/duners/parameters/struct.Parameter.html) as the second argument to `run_query` (or `execute_query`). Query 971694 has an `EnumParam` list parameter:
 
 ```rust
-use duners::{DuneClient, Parameter};
+use duners::Parameter;
 
-let params = vec![
-    Parameter::text("WalletAddress", "0x1234..."),
-    Parameter::number("MinAmount", "100"),
-    Parameter::list("Token", "ETH"),
-];
-let result = client.run_query::<MyRow>(QUERY_ID, Some(params), None).await?;
+let params = vec![Parameter::list("EnumParam", "WETH")];
+let result = client.run_query::<PriceRow>(971694, Some(params), None).await?;
 ```
 
 Parameter names must match the names defined in the query on Dune.
 
+## Manage saved queries
+
+Create a query, read it back, update its description, then run it. Creating and updating queries requires an API key with write access and an eligible plan. Use your own query ID for subsequent calls.
+
+```rust
+use duners::QueryBody;
+
+let created = client.create_query(QueryBody {
+    name: Some("SDK example".into()),
+    query_sql: Some("SELECT 1 AS value".into()),
+    ..Default::default()
+}).await?;
+let query = client.get_query(created.query_id).await?;
+println!("{}: {}", query.name, query.query_sql);
+
+client.update_query(created.query_id, QueryBody {
+    description: Some("A first query from Rust".into()),
+    ..Default::default()
+}).await?;
+let result = client.run_query::<ValueRow>(created.query_id, None, None).await?;
+println!("{:?}", result.get_rows());
+```
+
+## Upload tables
+
+For a one-off CSV upload, Dune infers the schema. Uploading to an existing table name replaces its data, so choose the name carefully. Uploads require write access and consume credits.
+
+```rust
+use duners::UploadCsvRequest;
+
+let table = client.upload_csv(UploadCsvRequest {
+    data: "symbol,price\nETH,123.0\n".into(),
+    table_name: "sdk_prices".into(),
+    description: None,
+    is_private: Some(true),
+}).await?;
+println!("{}", table.full_name);
+```
+
+To append rows, create a table with an explicit schema, then insert data. Replace `your_team` with your account or team namespace. The CSV header must match the table's columns.
+
+```rust
+use duners::{ColumnDef, CreateTableRequest};
+
+let namespace = "your_team";
+let table_name = "sdk_prices_incremental";
+client.create_table(CreateTableRequest {
+    namespace: namespace.into(),
+    table_name: table_name.into(),
+    schema: vec![
+        ColumnDef { name: "symbol".into(), column_type: "varchar".into(), nullable: None },
+        ColumnDef { name: "price".into(), column_type: "double".into(), nullable: None },
+    ],
+    description: None,
+    is_private: Some(true),
+}).await?;
+client.insert_table_rows(
+    namespace, table_name, "text/csv", "symbol,price\nETH,123.0\n".into(),
+).await?;
+```
+
+`clear_table(namespace, table_name)` removes every row but preserves the schema. `delete_table(namespace, table_name)` permanently removes the table and its data.
+
 ## Deserializing result rows
 
 Define a struct whose fields match the query’s columns and derive `Deserialize`. You can use your own types; depending on the column type, the API returns numbers and dates either as JSON numbers or as **strings**, so use the helpers in [`parse_utils`](https://docs.rs/duners/latest/duners/parse_utils/index.html) to accept both:
+
+```bash
+cargo add chrono --features serde
+```
 
 ```rust
 use chrono::{DateTime, Utc};
@@ -129,6 +216,10 @@ See the [API docs](https://docs.rs/duners) for details and types.
 ## Contract decoding
 
 Submit contracts for decoding in batches and track their status. Submissions are attributed to the user who created the API key; see the [docs](https://docs.dune.com/api-reference/contracts/introduction) for plan requirements.
+
+```bash
+cargo add serde_json
+```
 
 ```rust,no_run
 use duners::{ContractSubmissionInput, DuneClient, ListContractSubmissionsRequest, SubmitContractsRequest};
